@@ -1,0 +1,41 @@
+# Filename: spark-user.yaml
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: spark-client
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      # Permissions for the Spark jobs to write to the news-articles topic
+      - resource:
+          type: topic
+          name: news-articles
+          patternType: literal
+        operation: Write
+        host: "*"
+      - resource:
+          type: topic
+          name: news-articles
+          patternType: literal
+        operation: Describe
+        host: "*"
+      # Permissions for the Spark jobs to read from the news-articles topic
+      - resource:
+          type: topic
+          name: news-articles
+          patternType: literal
+        operation: Read
+        host: "*"
+      # Permissions for the Spark streaming job to manage its consumer group
+      - resource:
+          type: group
+          name: spark-streaming-group # This should match the group.id used by Member 4
+          patternType: literal
+        operation: All
+        host: "*"

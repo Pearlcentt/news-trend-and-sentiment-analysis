@@ -1,0 +1,14 @@
+# Filename: news-topic.yaml
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: news-articles
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: "my-cluster" # Links this topic to the Kafka cluster named 'my-cluster'
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 604800000    # Retain data for 7 days
+    segment.bytes: 1073741824 # 1 GB segment size

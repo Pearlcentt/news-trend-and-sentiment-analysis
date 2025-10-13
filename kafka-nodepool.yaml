@@ -1,0 +1,20 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: default
+  namespace: kafka
+  labels: # 👈 KEEP THIS SECTION
+    strimzi.io/cluster: my-cluster # 👈 This is the link
+spec:
+  # The 'labels' section is REMOVED.
+  replicas: 3
+  roles:
+    - broker
+    - controller
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 100Gi
+        deleteClaim: false

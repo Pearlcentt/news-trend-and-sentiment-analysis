@@ -1,0 +1,17 @@
+# Filename: kafka-metrics-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+    - pattern: "kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value"
+      name: "kafka_server_$1_$2"
+      type: "GAUGE"
+      labels:
+        clientId: "$3"
+        topic: "$4"
+        partition: "$5"

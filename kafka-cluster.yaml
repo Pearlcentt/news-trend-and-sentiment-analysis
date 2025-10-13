@@ -1,0 +1,49 @@
+# Filename: kafka-cluster.yaml
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: my-cluster      # The name of the Kafka cluster
+  namespace: kafka       # The namespace where the cluster will be deployed
+spec:
+  kafka:
+    version: 4.1.0      # Specify the desired Kafka version
+    replicas: 3          # Deploy a 3-broker cluster for high availability
+    authorization:
+      type: simple
+    listeners:           # Define how clients will connect to Kafka
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:              # Kafka broker configuration options
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics   # Reference to the ConfigMap defined in kafka-metrics-config.yaml
+          key: kafka-metrics-config.yml
+    storage:             # Configure persistent storage for brokers
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 100Gi
+          deleteClaim: false   # Important: Prevents data loss if the cluster is deleted
+  zookeeper:
+    replicas: 3          # Deploy a 3-node ZooKeeper ensemble
+    storage:
+      type: persistent-claim
+      size: 100Gi
+      deleteClaim: false
+  entityOperator:        # Deploy the Entity Operator to manage topics and users
+    topicOperator: {}
+    userOperator: {}
