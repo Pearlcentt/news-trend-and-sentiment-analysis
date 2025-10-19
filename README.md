@@ -53,7 +53,7 @@ This hybrid approach ensures both accuracy and freshness in analytics.
 ### 3.3 Data Flow
 
 <p align="center">
-  <img src="resources/dataflow.svg" alt="Lambda Architecture Diagram" width="500"/>
+  <img src="resources/dataflow.svg" alt="Lambda Architecture Diagram"/>
 </p>
 
 ### 4. Advantages
