@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-config
+data:
+  node.properties: |
+    node.environment=production
+    node.id=trino-coordinator
+    node.data-dir=/data/trino
+
+  jvm.config: |
+    -Xmx1G
+    -XX:+UseG1GC
+    -XX:+UseStringDeduplication
+
+  config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=true
+    http-server.http.port=8080
+    discovery.uri=http://trino-service:8080
+    web-ui.enabled=false
+    http-server.authentication.type=NONE
+
+  log.properties: |
+    io.trino=INFO
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-catalog
+data:
+  tpch.properties: |
+    connector.name=tpch
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+  template:
+    metadata:
+      labels:
+        app: trino
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:433
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: trino-config
+              mountPath: /etc/trino
+            - name: trino-catalog
+              mountPath: /etc/trino/catalog
+      volumes:
+        - name: trino-config
+          configMap:
+            name: trino-config
+        - name: trino-catalog
+          configMap:
+            name: trino-catalog
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-service
+spec:
+  type: ClusterIP
+  selector:
+    app: trino
+  ports:
+    - port: 8080
+      targetPort: 8080
