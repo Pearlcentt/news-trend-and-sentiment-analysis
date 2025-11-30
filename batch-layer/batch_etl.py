@@ -1,35 +1,37 @@
 import sys
 import os
 
-# --- 1. KHỞI TẠO SPARK ---
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_unixtime, to_timestamp, to_date, udf, rank, desc
+from pyspark.sql.functions import col, to_timestamp, to_date, udf, rank, desc
 from pyspark.sql.types import StructType, StructField, StringType, LongType, ArrayType, IntegerType, MapType
 from pyspark.sql.window import Window
 
 # Khởi tạo Spark
 spark = SparkSession.builder \
-    .appName("News_Batch_Layer_RealAI") \
+    .appName("News_Batch_Layer_Modular") \
     .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
     .master("local[*]") \
     .getOrCreate()
 
-# === [FIX LỖI QUAN TRỌNG] ===
-# Gửi file nlp_processor.py đến tất cả các Worker để chúng không bị lỗi ModuleNotFoundError
-# Lấy đường dẫn tuyệt đối của file nlp_processor.py (nằm cùng thư mục với file này)
+# === [QUAN TRỌNG] GỬI CÁC MODULE CHO WORKER ===
 current_dir = os.path.dirname(os.path.abspath(__file__))
-nlp_lib_path = os.path.join(current_dir, "nlp_processor.py")
 
-print(f">>> Đang gửi thư viện AI đến Spark Workers: {nlp_lib_path}")
-spark.sparkContext.addPyFile(nlp_lib_path)
-# ============================
+# File 1: AI Model
+nlp_path = os.path.join(current_dir, "nlp_processor.py")
+spark.sparkContext.addPyFile(nlp_path)
 
-# Import class chứa Model thật
-# Lưu ý: Import phải đặt SAU khi addPyFile nếu chạy trên Cluster thật, 
-# nhưng chạy local thì đặt đây cũng được, miễn là addPyFile chạy trước khi Action diễn ra.
+# File 2: Topic Modeler (File mới)
+topic_path = os.path.join(current_dir, "topic_modeler.py")
+spark.sparkContext.addPyFile(topic_path)
+
+print(f">>> Đã gửi modules đến Workers: {nlp_path}, {topic_path}")
+
+# Import các class từ file vệ tinh
 from nlp_processor import NewsAnalyzer
+from topic_modeler import TopicModeler  # <--- Import class mới
+# ==============================================
 
-# --- 2. ĐỊNH NGHĨA SCHEMA ---
+# --- ĐỊNH NGHĨA SCHEMA ---
 image_schema = StructType([
     StructField("url", StringType(), True),
     StructField("caption", StringType(), True)
@@ -60,79 +62,64 @@ schema = StructType([
     StructField("normalized_title", StringType(), True)
 ])
 
-# --- 3. EXTRACT ---
-# Đường dẫn input (tính từ thư mục gốc dự án)
+# --- 1. EXTRACT ---
 input_path = "data/raw_news.json"
-
-# Kiểm tra file input
-# Xử lý đường dẫn tương đối cẩn thận hơn
 if not os.path.exists(input_path):
-    # Thử tìm ở cấp cha nếu đang chạy từ thư mục con (fallback)
     input_path = "../data/raw_news.json"
-    if not os.path.exists(input_path):
-        print(f"❌ Lỗi: Không tìm thấy file raw_news.json ở {input_path}")
-        sys.exit(1)
 
 print(f">>> Đang đọc dữ liệu Raw từ: {input_path}")
-raw_df = spark.read \
-    .option("multiline", "true") \
-    .schema(schema) \
-    .json(input_path)
-# -------------------------
+raw_df = spark.read.option("multiline", "true").schema(schema).json(input_path)
 
-# --- 4. TRANSFORM ---
-
-# A. Chuẩn hóa thời gian
+# --- 2. TRANSFORM CƠ BẢN ---
+# Chuẩn hóa thời gian & Khử trùng lặp
 processed_df = raw_df.withColumn("published_datetime", to_timestamp(col("published_at") / 1000)) \
                      .withColumn("dt", to_date(col("published_datetime")))
 
-# B. Deduplication
 windowSpec = Window.partitionBy("article_id").orderBy(desc("updated_at"))
 dedup_df = processed_df.withColumn("rank", rank().over(windowSpec)) \
                        .filter(col("rank") == 1) \
                        .drop("rank")
 
-# C. AI ENRICHMENT (Sử dụng Model Thật)
-print(">>> Đang khởi tạo Model AI (Sẽ mất vài giây để tải weights)...")
+# --- 3. ADVANCED ANALYTICS (GỌI CÁC MODULE CON) ---
 
-# Khởi tạo model bên ngoài (Driver)
-# Lưu ý: Khi chạy local mode, biến này có thể được worker truy cập.
+# A. Chạy Topic Modeling (Gọi class TopicModeler)
+# Code gọn hơn hẳn: Chỉ cần khởi tạo và gọi .run()
+tm = TopicModeler(num_topics=3)
+topic_df = tm.run(dedup_df)
+
+# B. Chạy AI Sentiment (Gọi class NewsAnalyzer)
+print(">>> Đang chạy AI Sentiment Analysis...")
 analyzer = NewsAnalyzer()
 
 def apply_sentiment(text):
-    # Gọi hàm phân tích của class
     return analyzer.analyze_sentiment(text)
 
 def apply_keywords(text):
     return analyzer.extract_keywords(text)
 
-# Đăng ký UDF
 sentiment_udf = udf(apply_sentiment, MapType(StringType(), StringType()))
 keyword_udf = udf(apply_keywords, ArrayType(StringType()))
 
-print(">>> Đang chạy AI Inference trên toàn bộ dữ liệu (Có thể hơi lâu)...")
-
-enriched_df = dedup_df.withColumn("sentiment_analysis", sentiment_udf(col("body_text"))) \
+enriched_df = topic_df.withColumn("sentiment_analysis", sentiment_udf(col("body_text"))) \
                       .withColumn("extracted_keywords", keyword_udf(col("body_text")))
 
-# --- 5. LOAD ---
+# --- 4. LOAD ---
 final_output = enriched_df.select(
     "article_id", "source_domain", "published_datetime", "dt",
-    "title", "authors", "section", "language", "country",
-    "sentiment_analysis", "extracted_keywords"
+    "title", "section", "language", "country",
+    "topic_id", # Cột từ TopicModeler
+    "sentiment_analysis", "extracted_keywords" # Cột từ NewsAnalyzer
 )
 
-# Xử lý đường dẫn output tương tự
 output_path = "data/simulated_hdfs/articles_enriched"
-if input_path.startswith(".."): # Nếu input dùng .., output cũng nên thế
+if input_path.startswith(".."):
     output_path = "../data/simulated_hdfs/articles_enriched"
 
 print(f">>> Đang lưu kết quả xuống Parquet tại: {output_path}")
-
 final_output.write \
     .mode("overwrite") \
     .partitionBy("dt", "source_domain") \
     .parquet(output_path)
 
-print("✅ JOB THÀNH CÔNG! Đã dùng model DistilBERT phân tích xong.")
+print("✅ JOB THÀNH CÔNG! Pipeline hoàn chỉnh: ETL -> Topic Modeling -> AI Sentiment.")
 spark.stop()
