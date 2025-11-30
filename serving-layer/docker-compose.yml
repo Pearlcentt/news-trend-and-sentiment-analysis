@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  presto-coordinator:
+    image: trinodb/trino:latest
+    container_name: presto-coordinator
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./presto/catalog:/etc/trino/catalog
+      - ./presto/config.properties:/etc/trino/config.properties
+      - ./presto/jvm.config:/etc/trino/jvm.config
+      - ./presto/node.properties:/etc/trino/node.properties
+      - presto-data:/var/trino/data
+    environment:
+      - PRESTO_ENV=production
+    networks:
+      - news-analysis-network
+    command: ["/usr/lib/trino/bin/run-trino"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  presto-cli:
+    image: trinodb/trino:latest
+    container_name: presto-cli
+    depends_on:
+      - presto-coordinator
+    volumes:
+      - ./presto/queries:/queries
+    networks:
+      - news-analysis-network
+    entrypoint: ["/bin/bash"]
+    command: ["-c", "tail -f /dev/null"]  # Keep container running
+    stdin_open: true
+    tty: true
+
+volumes:
+  presto-data:
+
+networks:
+  news-analysis-network:
+    driver: bridge
+
