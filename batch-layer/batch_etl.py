@@ -84,7 +84,7 @@ dedup_df = processed_df.withColumn("rank", rank().over(windowSpec)) \
 
 # A. Chạy Topic Modeling (Gọi class TopicModeler)
 # Code gọn hơn hẳn: Chỉ cần khởi tạo và gọi .run()
-tm = TopicModeler(num_topics=3)
+tm = TopicModeler(num_topics=6)
 topic_df = tm.run(dedup_df)
 
 # B. Chạy AI Sentiment (Gọi class NewsAnalyzer)
@@ -121,5 +121,5 @@ final_output.write \
     .partitionBy("dt", "source_domain") \
     .parquet(output_path)
 
-print("✅ JOB THÀNH CÔNG! Pipeline hoàn chỉnh: ETL -> Topic Modeling -> AI Sentiment.")
+print("Job Done.")
 spark.stop()

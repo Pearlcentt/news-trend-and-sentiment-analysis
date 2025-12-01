@@ -10,7 +10,7 @@ class NewsAnalyzer:
             model="distilbert-base-uncased-finetuned-sst-2-english",
             framework="pt" # Sử dụng PyTorch
         )
-        print("✅ Model AI đã tải thành công!")
+        print("Model AI đã tải thành công!")
 
     def analyze_sentiment(self, text):
         """
@@ -34,7 +34,7 @@ class NewsAnalyzer:
                 "score": str(round(top_result['score'], 4))
             }
         except Exception as e:
-            print(f"⚠️ Lỗi khi AI đọc bài báo: {e}")
+            print(f"Error while reading articles: {e}")
             return {"label": "error", "score": "0.0"}
 
     def extract_keywords(self, text):

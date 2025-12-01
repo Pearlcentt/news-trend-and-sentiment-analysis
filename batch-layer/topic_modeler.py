@@ -5,7 +5,7 @@ from pyspark.ml.clustering import LDA
 from pyspark.ml import Pipeline
 
 class TopicModeler:
-    def __init__(self, num_topics=3, vocab_size=1000):
+    def __init__(self, num_topics=8, vocab_size=1000):
         self.num_topics = num_topics
         self.vocab_size = vocab_size
         print(f">>> [INIT] TopicModeler đã sẵn sàng (Topics={num_topics})")
