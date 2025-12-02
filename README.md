@@ -1,64 +1,98 @@
-# Real-Time News Trend & Sentiment Analysis Platform
+# 📰 News Trend & Sentiment Analysis Pipeline
 
-## 1. Problem Statement
-This project develops a **real-time global news trend and sentiment analytics system** that continuously ingests and processes online news streams from publishers such as **Reuters**, **The Irish Times**, and **The Wall Street Journal**.  
-The platform supports both **historical batch analysis** and **real-time stream analytics** to answer critical questions like:
+## A production-ready **Lambda Architecture** implementation for real-time and batch processing of global news, deployed on **Kubernetes**. Built for the IT4931 Big Data Storage and Processing course at HUST.
 
-- What global topics are trending right now?  
-- How is public sentiment evolving around key themes (e.g., elections, markets, disasters)?  
-- Which regions or publishers show the strongest sentiment shifts?
+## 🎯 Project Overview
 
-## 2. System Scope
+This system provides:
 
-### 2.1 Objectives
-- Real-time ingestion of global news feeds via APIs/RSS  
-- Stream processing for trending topics & sentiment detection  
-- Historical batch processing for long-term trend discovery  
-- Distributed data storage in HDFS and NoSQL databases  
-- Visualization dashboard for interactive insights  
+- **Real-time news ingestion** from 14+ RSS feeds (BBC, CNN, Reuters, NYT, Guardian, etc.)
+- **Sentiment analysis** on 10k+ articles (Positive| Negative| Neutral)
+- **Category classification**
+- **Interactive Streamlit dashboard** with content viewer
 
-### 2.2 Limitations
-- Dependent on external API rate limits and feed availability  
-- Focused primarily on English-language publishers  
-- Predictive modeling (e.g., trend forecasting) is future work  
+---
 
-## 3. System Architecture
-We adopt a **Lambda Architecture**, combining **batch processing** for historical analytics with **streaming processing** for low-latency insights.  
-This hybrid approach ensures both accuracy and freshness in analytics.
+## 🏗️ Architecture
 
-### 3.1 Architectural Overview
+```
+                            ┌─────────────────────────────────────────────────────┐
+                            │                  DATA SOURCES                       │
+                            │  BBC • CNN • Reuters • NYT • Guardian • GDELT API   │
+                            └─────────────────────────┬───────────────────────────┘
+                                                      │
+                                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                               INGESTION LAYER                                           │
+│  ┌──────────────┐    ┌─────────────────┐    ┌──────────────────────────────────────┐   │
+│  │ News Crawler │───▶│ Kafka (Avro)    │───▶│ Schema Registry                      │   │
+│  │ (RSS + API)  │    │ news-raw topic  │    │ Article schema validation            │   │
+│  └──────────────┘    └─────────────────┘    └──────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+                                                      │
+                    ┌─────────────────────────────────┼─────────────────────────────────┐
+                    │                                 │                                 │
+                    ▼                                 ▼                                 ▼
+┌───────────────────────────┐   ┌───────────────────────────┐   ┌───────────────────────┐
+│      SPEED LAYER          │   │      BATCH LAYER          │   │    SERVING LAYER      │
+│  Spark Structured         │   │  Spark Batch Jobs         │   │  Trino (SQL)          │
+│  Streaming                │   │  - Sentiment Analysis     │   │  Federated queries    │
+│  - Real-time aggregates   │   │  - Category Classification│   │  across all stores    │
+│  - 5-min windows          │   │  - Keyword Extraction     │   │                       │
+└───────────────────────────┘   └───────────────────────────┘   └───────────────────────┘
+                    │                                 │                                 │
+                    ▼                                 ▼                                 │
+┌───────────────────────────┐   ┌───────────────────────────┐                           │
+│  MongoDB (Hot Storage)    │   │  HDFS + Parquet           │◀──────────────────────────┘
+│  - Real-time views        │   │  (Cold Storage)           │
+│  - 4,784+ articles        │   │  - Historical archive     │
+└───────────────────────────┘   └───────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           VISUALIZATION LAYER                                           │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐    │
+│  │  Streamlit Dashboard (Light Theme)                                              │    │
+│  │  📊 Sentiment Distribution | 🌐 Top Sources | 📁 Categories                     │    │
+│  │  📈 Timeline | 🔑 Keywords | 🌍 Locations | 📰 News Feed                        │    │
+│  └────────────────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 
-1. **Data Ingestion Layer** → Collects live news via APIs and streams to Kafka topics  
-2. **Speed Layer** → Spark Structured Streaming performs near-real-time sentiment & topic aggregation  
-3. **Batch Layer** → Spark Batch jobs process and store large-scale historical data in HDFS  
-4. **Storage Layer** → Cassandra(hot data), HDFS (cold data)  
-5. **Query Layer** → Presto enables unified SQL access across data stores  
-6. **Visualization Layer** → Dashboards (Grafana/Kibana/React) present insights interactively  
-7. **Deployment Layer** → Kubernetes orchestrates scalable, fault-tolerant microservices  
+```
 
-### 3.2 Component Responsibilities
+## 🔧 Port Configuration
 
-| Component | Technology Stack| Core Function |
-|--------------|----------------|--------|
-| **Data Source** | Reuters, WSJ, Irish Times APIs | Provide global live news streams |
-| **Ingestion** | Apache Kafka | Streams data into topics `news_raw`, `news_processed` |
-| **Batch Layer** | Apache Spark (Batch) + HDFS | Historical sentiment modeling and topic detection |
-| **Speed Layer** | Spark Structured Streaming | Real-time trend and sentiment updates |
-| **Storage (Hot)** | Cassandra | Stores latest processed results for dashboards |
-| **Storage (Cold)** | HDFS | Archives all raw and processed data |
-| **Query Layer** | Presto | Unified SQL queries across batch and real-time data |
-| **Visualization** | Grafana / Kibana / React | Dashboards showing sentiment and topic evolution |
-| **Deployment** | Kubernetes | Container orchestration and scalability |
+| Service       | Internal | NodePort | Access            |
+| ------------- | -------- | -------- | ----------------- |
+| **Streamlit** | 8501     | 30501    | `localhost:8501`  |
+| **MongoDB**   | 27017    | 30017    | `localhost:27017` |
+| **Grafana**   | 3000     | 30300    | `localhost:3000`  |
+| **Airflow**   | 8080     | 30080    | `localhost:8080`  |
+| Kafka         | 9092     | -        | Internal          |
+| Spark Master  | 7077     | -        | Internal          |
 
-### 3.3 Data Flow
+---
 
-<p align="center">
-  <img src="resources/dataflow.svg" alt="Lambda Architecture Diagram"/>
-</p>
+## 🎨 Dashboard Features
 
-### 4. Advantages
+- **Sentiment Distribution** - Pie chart with color coding
+- **Top Sources** - News source breakdown
+- **Category Distribution** - Donut chart by topic
+- **Timeline** - News volume over time
+- **Keywords Treemap** - Trending terms
+- **Locations Chart** - Geographic mentions
+- **Word Cloud** - Visual term frequency
+- **Sentiment Trend** - 100% stacked bar over time
+- **News Feed** - Articles with expandable content viewer
 
-* Unified Lambda Architecture for historical and real-time analytics
-* Scalable ingestion from multiple news publishers
-* Low-latency detection of emerging topics and sentiments
-* Modular and containerized design for deployment flexibility
+## 📝 Course Information
+
+**Course**: IT4931 - Big Data Storage and Processing  
+**Institution**: HUST - Hanoi University of Science and Technology  
+**Year**: 2025
+
+---
+
+## 📄 License
+
+MIT License
