@@ -1,0 +1,88 @@
+{
+  "type": "record",
+  "name": "NewsProcessed",
+  "namespace": "com.news.pipeline",
+  "doc": "Per-article enriched record emitted by the Structured Streaming job.",
+  "fields": [
+    { "name": "article_id", "type": "string" },
+    { "name": "source_domain", "type": "string" },
+    {
+      "name": "published_at",
+      "type": ["null", { "type": "long", "logicalType": "timestamp-millis" }],
+      "default": null
+    },
+    { "name": "language", "type": "string" },
+    {
+      "name": "sentiment",
+      "type": {
+        "type": "record",
+        "name": "Sentiment",
+        "fields": [
+          { "name": "label", "type": "string" },
+          { "name": "polarity", "type": "double" }
+        ]
+      }
+    },
+    {
+      "name": "entities",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Entity",
+          "fields": [
+            { "name": "type", "type": "string" },
+            { "name": "text", "type": "string" },
+            { "name": "norm", "type": ["null", "string"], "default": null }
+          ]
+        }
+      },
+      "default": []
+    },
+    {
+      "name": "keywords",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Keyword",
+          "fields": [
+            { "name": "term", "type": "string" },
+            { "name": "score", "type": "double" }
+          ]
+        }
+      },
+      "default": []
+    },
+    {
+      "name": "topics",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Topic",
+          "fields": [
+            { "name": "topic_id", "type": "int" },
+            { "name": "score", "type": "double" }
+          ]
+        }
+      },
+      "default": []
+    },
+    { "name": "toxicity_score", "type": ["null", "double"], "default": null },
+    { "name": "clean_text", "type": "string" },
+    { "name": "language_conf", "type": ["null", "double"], "default": null },
+    { "name": "dedup_group_id", "type": "string" },
+    { "name": "raw_partition", "type": "int" },
+    { "name": "raw_offset", "type": "long" },
+    {
+      "name": "ingest_time",
+      "type": { "type": "long", "logicalType": "timestamp-millis" }
+    },
+    {
+      "name": "process_time",
+      "type": { "type": "long", "logicalType": "timestamp-millis" }
+    },
+    { "name": "schema_version", "type": "int", "default": 1 }
+  ]
+}
