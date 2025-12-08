@@ -1,0 +1,169 @@
+# Extended RSS Feeds for Big Data Pipeline
+# 20+ sources for maximum data collection
+
+feeds:
+  # Technology
+  - name: "techcrunch"
+    url: "https://techcrunch.com/feed/"
+    section: "Technology"
+    category: "Tech News"
+    language: "en"
+    
+  - name: "ars_technica"
+    url: "https://feeds.arstechnica.com/arstechnica/index"
+    section: "Technology"
+    category: "Tech Analysis"
+    language: "en"
+    
+  - name: "wired"
+    url: "https://www.wired.com/feed/rss"
+    section: "Technology"
+    category: "Tech Culture"
+    language: "en"
+    
+  - name: "the_verge"
+    url: "https://www.theverge.com/rss/index.xml"
+    section: "Technology"
+    category: "Tech Products"
+    language: "en"
+
+  # World News
+  - name: "bbc_world"
+    url: "http://feeds.bbci.co.uk/news/world/rss.xml"
+    section: "World"
+    category: "International"
+    language: "en"
+    
+  - name: "guardian_world"
+    url: "https://www.theguardian.com/world/rss"
+    section: "World"
+    category: "Global Affairs"
+    language: "en"
+    
+  - name: "reuters_world"
+    url: "https://www.reutersagency.com/feed/?best-topics=world"
+    section: "World"
+    category: "Breaking News"
+    language: "en"
+    
+  - name: "al_jazeera"
+    url: "https://www.aljazeera.com/xml/rss/all.xml"
+    section: "World"
+    category: "International"
+    language: "en"
+    
+  - name: "cnn_world"
+    url: "http://rss.cnn.com/rss/edition_world.rss"
+    section: "World"
+    category: "Global News"
+    language: "en"
+
+  # Business & Finance
+  - name: "bloomberg"
+    url: "https://feeds.bloomberg.com/markets/news.rss"
+    section: "Business"
+    category: "Markets"
+    language: "en"
+    
+  - name: "reuters_business"
+    url: "https://www.reutersagency.com/feed/?best-topics=business-finance"
+    section: "Business"
+    category: "Finance"
+    language: "en"
+    
+  - name: "financial_times"
+    url: "https://www.ft.com/rss/home"
+    section: "Business"
+    category: "Economy"
+    language: "en"
+
+  # Sports
+  - name: "espn"
+    url: "https://www.espn.com/espn/rss/news"
+    section: "Sports"
+    category: "Sports News"
+    language: "en"
+    
+  - name: "bbc_sports"
+    url: "http://feeds.bbci.co.uk/sport/rss.xml"
+    section: "Sports"
+    category: "Sports"
+    language: "en"
+    
+  - name: "sky_sports"
+    url: "https://www.skysports.com/rss/12040"
+    section: "Sports"
+    category: "Football"
+    language: "en"
+
+  # Science
+  - name: "nature"
+    url: "http://feeds.nature.com/nature/rss/current"
+    section: "Science"
+    category: "Research"
+    language: "en"
+    
+  - name: "science_daily"
+    url: "https://www.sciencedaily.com/rss/all.xml"
+    section: "Science"
+    category: "Science News"
+    language: "en"
+    
+  - name: "new_scientist"
+    url: "https://www.newscientist.com/feed/home"
+    section: "Science"
+    category: "Science"
+    language: "en"
+
+  # Entertainment
+  - name: "variety"
+    url: "https://variety.com/feed/"
+    section: "Entertainment"
+    category: "Movies"
+    language: "en"
+    
+  - name: "rolling_stone"
+    url: "https://www.rollingstone.com/feed/"
+    section: "Entertainment"
+    category: "Music"
+    language: "en"
+
+  # Politics
+  - name: "politico"
+    url: "https://www.politico.com/rss/politicopicks.xml"
+    section: "Politics"
+    category: "US Politics"
+    language: "en"
+    
+  - name: "bbc_politics"
+    url: "http://feeds.bbci.co.uk/news/politics/rss.xml"
+    section: "Politics"
+    category: "UK Politics"
+    language: "en"
+
+# Crawler settings
+crawler:
+  poll_interval_seconds: 60  # Fast polling for Big Data demo
+  request_timeout: 15
+  max_retries: 3
+  state_store: "/app/state/crawler_state.json"
+  default_country: "US"
+  default_feed_name: "general"
+  schema_version: 3
+  concurrent_feeds: 5  # Process 5 feeds concurrently
+  max_articles_per_feed: 50  # Max articles per feed per cycle
+
+# Kafka settings
+kafka:
+  bootstrap_servers: "kafka-broker:9092"
+  topic: "news_raw"
+  client_id: "news-crawler-extended"
+  security_protocol: "PLAINTEXT"
+  batch_size: 16384
+  linger_ms: 10
+
+# Schema Registry
+schema_registry:
+  url: "http://sr-service:8081"
+  subject: "news_raw-value"
+  schema_path: "/app/schemas/news_raw.avsc"
