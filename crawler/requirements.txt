@@ -1,0 +1,6 @@
+beautifulsoup4==4.12.3
+confluent-kafka==2.12.2
+fastavro==1.12.1
+feedparser==6.0.11
+PyYAML==6.0.2
+requests==2.32.3

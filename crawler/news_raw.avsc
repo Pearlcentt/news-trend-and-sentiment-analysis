@@ -1,0 +1,37 @@
+{
+  "type": "record",
+  "name": "NewsRaw",
+  "namespace": "com.news.pipeline",
+  "doc": "Raw news article captured directly from crawlers before enrichment.",
+  "fields": [
+    {"name": "article_id", "type": "string"},
+    {"name": "source_domain", "type": "string"},
+    {"name": "source_feed", "type": ["null", "string"], "default": null},
+    {"name": "canonical_url", "type": ["null", "string"], "default": null},
+    {"name": "published_at", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+    {"name": "updated_at", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+    {"name": "authors", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "section", "type": ["null", "string"], "default": null},
+    {"name": "category", "type": ["null", "string"], "default": null},
+    {"name": "tags", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "title", "type": "string"},
+    {"name": "body_text", "type": "string"},
+    {"name": "language", "type": "string"},
+    {"name": "country", "type": ["null", "string"], "default": null},
+    {"name": "images", "type": {"type": "array", "items": {"type": "record", "name": "Image", "fields": [
+      {"name": "url", "type": "string"},
+      {"name": "caption", "type": ["null", "string"], "default": null}
+    ]}}, "default": []},
+    {"name": "outlinks", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "ingest_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "crawl_status", "type": "string"},
+    {"name": "http_status", "type": "int"},
+    {"name": "content_type", "type": "string"},
+    {"name": "content_length", "type": ["null", "long"], "default": null},
+    {"name": "normalized_title", "type": "string"},
+    {"name": "content_hash_md5", "type": "string"},
+    {"name": "simhash64", "type": "string"},
+    {"name": "event_time", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "schema_version", "type": "int", "default": 1}
+  ]
+}

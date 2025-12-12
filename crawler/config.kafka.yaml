@@ -1,0 +1,30 @@
+kafka:
+  # For local host access (docker-compose exposes PLAINTEXT_HOST on 29092)
+  bootstrap_servers: "localhost:29092"
+  topic: "news_raw"
+  client_id: "news-crawler"
+  security_protocol: "PLAINTEXT"
+schema_registry:
+  # Local access to schema registry exposed on host
+  url: "http://localhost:8081"
+  subject: "news_raw-value"
+  schema_path: "../../schemas/news_raw.avsc"
+crawler:
+  poll_interval_seconds: 120
+  request_timeout: 15
+  max_retries: 3
+  state_store: "./state/crawler_state.json"
+  default_country: "US"
+  default_feed_name: "general"
+  schema_version: 3
+feeds:
+  # - name: "reuters_top"
+  #   url: "https://www.reutersagency.com/feed/?best-topics=business-and-finance"
+  #   section: "Economy"
+  #   category: "Monetary Policy"
+  #   language: "en"
+  - name: "guardian_world"
+    url: "https://www.theguardian.com/world/rss"
+    section: "World"
+    category: "General"
+    language: "en"
