@@ -1,0 +1,11 @@
+schemas:
+  news_raw: "../../schemas/news_raw.avsc"
+spark:
+  shuffle_partitions: 300
+  log_level: "WARN"
+inputs:
+  kafka:
+    bootstrap_servers: "kafka-broker:9092"
+    topic: "news_raw"
+outputs:
+  parquet_path: "hdfs:///data/news/articles_enriched_parquet"
