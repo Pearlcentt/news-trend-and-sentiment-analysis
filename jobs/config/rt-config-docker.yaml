@@ -1,0 +1,34 @@
+kafka:
+  bootstrap_servers: "kafka:9092"
+  input_topic: "news_raw"
+  output_topic: "news_processed"
+  starting_offsets: "earliest"
+schemas:
+  news_raw: "/opt/spark/work/schemas/news_raw.avsc"
+  news_processed: "/opt/spark/work/schemas/news_processed.avsc"
+  processed_schema_version: 2
+spark:
+  shuffle_partitions: 4
+  log_level: "INFO"
+  adaptive_enabled: true
+  auto_broadcast_join_threshold: 134217728
+streaming:
+  watermark: "5 minutes"
+  window_duration: "10 minutes"
+  window_slide: "5 minutes"
+  checkpoint_news_processed: "/tmp/checkpoints/news_processed"
+  checkpoint_rt_trends: "/tmp/checkpoints/rt_trends"
+  checkpoint_rt_sentiment: "/tmp/checkpoints/rt_sentiment"
+  checkpoint_rt_topic_pivot: "/tmp/checkpoints/rt_topic_pivot"
+  checkpoint_rt_topic_totals: "/tmp/checkpoints/rt_topic_totals"
+mongo:
+  uri: "mongodb://mongo:27017"
+  database: "news_rt"
+reference_data:
+  source_metadata: "/opt/spark/work/jobs/reference/source_metadata.json"
+cassandra:
+  enabled: true
+  hosts:
+    - "cassandra"
+  keyspace: "news_rt"
+  port: 9042
