@@ -1,0 +1,9 @@
+streamlit>=1.28.0
+plotly>=5.17.0
+altair>=5.1.0
+pymongo>=4.5.0
+confluent-kafka>=2.2.0
+pandas>=2.0.0
+wordcloud>=1.9.0
+python-dateutil>=2.8.0
+requests>=2.31.0
