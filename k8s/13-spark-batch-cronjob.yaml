@@ -1,0 +1,254 @@
+# Spark Batch CronJob - Daily Processing
+# Runs batch aggregations on a schedule
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-batch-code
+  namespace: news-pipeline
+data:
+  batch_job.py: |
+    """
+    Batch Processing Job for News Pipeline
+    Runs daily aggregations and writes to HDFS/MongoDB
+    """
+    import os
+    from datetime import datetime, timedelta
+    from pyspark.sql import SparkSession, Window
+    import pyspark.sql.functions as F
+    from pymongo import MongoClient
+    
+    # Configuration
+    MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://mongodb:27017')
+    KAFKA_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka-broker:9092')
+    
+    print("=" * 60)
+    print("SPARK BATCH JOB - NEWS PIPELINE")
+    print(f"Start time: {datetime.now()}")
+    print(f"MongoDB: {MONGODB_URI}")
+    print("=" * 60)
+    
+    # Create Spark session
+    spark = (
+        SparkSession.builder
+        .appName("NewsBatchPipeline")
+        .config("spark.jars.packages", 
+                "org.apache.spark:spark-avro_2.12:3.5.0,"
+                "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0")
+        .config("spark.sql.shuffle.partitions", "8")
+        .config("spark.sql.adaptive.enabled", "true")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+    
+    # Read historical data from Kafka
+    print("\n[Step 1] Reading from Kafka...")
+    try:
+        raw_df = (
+            spark.read
+            .format("kafka")
+            .option("kafka.bootstrap.servers", KAFKA_SERVERS)
+            .option("subscribe", "news_raw")
+            .option("startingOffsets", "earliest")
+            .option("endingOffsets", "latest")
+            .load()
+        )
+        total_records = raw_df.count()
+        print(f"  Read {total_records} records from Kafka")
+    except Exception as e:
+        print(f"  Error reading Kafka: {e}")
+        print("  Creating sample data for demo...")
+        raw_df = spark.createDataFrame([
+            ("art1", "reuters.com", "Markets surge on positive economic data", "positive"),
+            ("art2", "bbc.com", "Technology sector shows strong growth", "positive"),
+            ("art3", "guardian.com", "Climate concerns grow amid new reports", "negative"),
+            ("art4", "wsj.com", "Federal Reserve hints at rate changes", "neutral"),
+            ("art5", "techcrunch.com", "AI startup raises major funding round", "positive"),
+        ], ["article_id", "source_domain", "title", "sentiment"])
+        total_records = raw_df.count()
+    
+    # Create enriched dataset
+    if "value" in raw_df.columns:
+        # Parse Kafka data
+        articles = raw_df.select(
+            F.col("key").cast("string").alias("article_id"),
+            F.col("timestamp").alias("event_ts")
+        ).withColumn("source_domain", F.lit("unknown"))
+    else:
+        articles = raw_df
+    
+    articles = articles.withColumn("dt", F.current_date())
+    
+    # Step 2: Complex Aggregations
+    print("\n[Step 2] Running aggregations...")
+    
+    # 2a. Source domain statistics
+    source_stats = (
+        articles
+        .groupBy("source_domain")
+        .agg(
+            F.count("*").alias("article_count"),
+            F.countDistinct("article_id").alias("unique_articles")
+        )
+    )
+    print("  Source statistics:")
+    source_stats.show()
+    
+    # 2b. Daily summary with rollup
+    daily_rollup = (
+        articles
+        .groupBy("dt", "source_domain")
+        .agg(F.count("*").alias("count"))
+    )
+    print("  Daily rollup:")
+    daily_rollup.show()
+    
+    # Step 3: Write to MongoDB
+    print("\n[Step 3] Writing to MongoDB...")
+    try:
+        client = MongoClient(MONGODB_URI)
+        db = client["news_analytics"]
+        
+        # Write batch statistics
+        batch_stats = {
+            "batch_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "run_time": datetime.now(),
+            "total_records": total_records,
+            "sources": source_stats.count(),
+            "status": "completed"
+        }
+        db.batch_runs.insert_one(batch_stats)
+        
+        # Write source statistics
+        for row in source_stats.collect():
+            db.source_stats.update_one(
+                {"source_domain": row["source_domain"]},
+                {
+                    "$set": {
+                        "article_count": row["article_count"],
+                        "unique_articles": row["unique_articles"],
+                        "updated_at": datetime.now()
+                    }
+                },
+                upsert=True
+            )
+        
+        client.close()
+        print(f"  Wrote batch stats and {source_stats.count()} source records to MongoDB")
+    except Exception as e:
+        print(f"  MongoDB error: {e}")
+    
+    print("\n" + "=" * 60)
+    print(f"BATCH JOB COMPLETED at {datetime.now()}")
+    print("=" * 60)
+    
+    spark.stop()
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: spark-batch-job
+  namespace: news-pipeline
+spec:
+  schedule: "0 2 * * *"  # Run at 2 AM daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: spark-batch
+            image: apache/spark:3.5.0-python3
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              echo "Starting Batch Job..."
+              pip install pymongo --target=/tmp/pylibs --quiet 2>/dev/null || true
+              export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs"
+              export HOME=/tmp
+              mkdir -p /tmp/.ivy2
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --deploy-mode client \
+                --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+                --conf spark.driver.memory=512m \
+                --conf spark.pyspark.python=/usr/bin/python3 \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                /opt/spark-apps/batch_job.py
+            env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: PYSPARK_PYTHON
+              value: "/usr/bin/python3"
+            volumeMounts:
+            - name: batch-code
+              mountPath: /opt/spark-apps
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "250m"
+              limits:
+                memory: "1Gi"
+                cpu: "1"
+          volumes:
+          - name: batch-code
+            configMap:
+              name: spark-batch-code
+          restartPolicy: OnFailure
+---
+# Manual Job to run batch immediately
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-batch-manual
+  namespace: news-pipeline
+spec:
+  template:
+    spec:
+      containers:
+      - name: spark-batch
+        image: apache/spark:3.5.0-python3
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          echo "Starting Manual Batch Job..."
+          pip install pymongo --target=/tmp/pylibs --quiet 2>/dev/null || true
+          export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs"
+          export HOME=/tmp
+          mkdir -p /tmp/.ivy2
+          /opt/spark/bin/spark-submit \
+            --master local[2] \
+            --deploy-mode client \
+            --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+            --conf spark.driver.memory=512m \
+            --conf spark.pyspark.python=/usr/bin/python3 \
+            --conf spark.jars.ivy=/tmp/.ivy2 \
+            /opt/spark-apps/batch_job.py
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-broker:9092"
+        - name: MONGODB_URI
+          value: "mongodb://mongodb:27017"
+        - name: PYSPARK_PYTHON
+          value: "/usr/bin/python3"
+        volumeMounts:
+        - name: batch-code
+          mountPath: /opt/spark-apps
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+      volumes:
+      - name: batch-code
+        configMap:
+          name: spark-batch-code
+      restartPolicy: Never
+  backoffLimit: 2

@@ -1,0 +1,260 @@
+# Spark Streaming Job Deployment
+# Runs the real-time processing pipeline continuously
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-streaming-code
+  namespace: news-pipeline
+data:
+  spark_streaming_job.py: |
+    """
+    Production Spark Streaming Job for Kubernetes
+    Reads from Kafka, processes news articles, writes to MongoDB
+    """
+    import os
+    from datetime import datetime
+    from pyspark.sql import SparkSession
+    from pyspark.sql.avro.functions import from_avro
+    import pyspark.sql.functions as F
+    from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+    from pymongo import MongoClient
+    import json
+
+    # Configuration from environment
+    KAFKA_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka-broker:9092')
+    MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://mongodb:27017')
+    SCHEMA_REGISTRY_URL = os.getenv('SCHEMA_REGISTRY_URL', 'http://sr-service:8081')
+
+    print("=" * 60)
+    print("SPARK STREAMING JOB - NEWS PIPELINE")
+    print(f"Kafka: {KAFKA_SERVERS}")
+    print(f"MongoDB: {MONGODB_URI}")
+    print("=" * 60)
+
+    # Create Spark session
+    spark = (
+        SparkSession.builder
+        .appName("NewsSpeedLayer")
+        .config("spark.jars.packages", 
+                "org.apache.spark:spark-avro_2.12:3.5.0,"
+                "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0")
+        .config("spark.sql.shuffle.partitions", "4")
+        .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+
+    # Avro schema for news_raw (simplified inline)
+    schema_json = '''
+    {
+      "type": "record",
+      "name": "NewsRaw",
+      "namespace": "com.newspipeline.avro",
+      "fields": [
+        {"name": "article_id", "type": "string"},
+        {"name": "source_domain", "type": ["null", "string"], "default": null},
+        {"name": "title", "type": ["null", "string"], "default": null},
+        {"name": "body_text", "type": ["null", "string"], "default": null},
+        {"name": "published_at", "type": ["null", "long"], "default": null},
+        {"name": "event_time", "type": ["null", "long"], "default": null},
+        {"name": "language", "type": ["null", "string"], "default": null},
+        {"name": "content_hash_md5", "type": ["null", "string"], "default": null}
+      ]
+    }
+    '''
+
+    print("Reading from Kafka topic: news_raw")
+
+    # Read from Kafka
+    raw_stream = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_SERVERS)
+        .option("subscribe", "news_raw")
+        .option("startingOffsets", "earliest")
+        .option("failOnDataLoss", "false")
+        .load()
+    )
+
+    # Parse Avro (strip 5-byte Confluent header)
+    parsed = raw_stream.select(
+        F.col("key").cast("string").alias("article_id"),
+        from_avro(F.expr("substring(value, 6)"), schema_json).alias("payload"),
+        F.col("timestamp").alias("kafka_ts")
+    ).select("payload.*", "kafka_ts")
+
+    # Add processing fields
+    enriched = parsed.withColumn(
+        "event_ts",
+        F.when(
+            F.col("event_time").cast("long").isNotNull(),
+            (F.col("event_time").cast("long") / 1000).cast("timestamp")
+        ).otherwise(F.current_timestamp())
+    ).withColumn("process_time", F.current_timestamp())
+
+    # Simple sentiment analysis UDF
+    @F.udf(returnType=StringType())
+    def simple_sentiment(text):
+        if not text:
+            return "neutral"
+        text_lower = text.lower()
+        positive = ['good', 'great', 'excellent', 'positive', 'growth', 'surge', 'gain', 'rise', 'success']
+        negative = ['bad', 'decline', 'fall', 'drop', 'crisis', 'crash', 'loss', 'fail', 'negative']
+        pos_count = sum(1 for w in positive if w in text_lower)
+        neg_count = sum(1 for w in negative if w in text_lower)
+        if pos_count > neg_count:
+            return "positive"
+        elif neg_count > pos_count:
+            return "negative"
+        return "neutral"
+
+    # Add sentiment
+    processed = enriched.withColumn("sentiment", simple_sentiment(F.col("title")))
+
+    # Write to MongoDB using foreachBatch
+    def write_to_mongo(batch_df, batch_id):
+        if batch_df.isEmpty():
+            print(f"Batch {batch_id}: empty")
+            return
+        
+        count = batch_df.count()
+        print(f"Batch {batch_id}: processing {count} records")
+        
+        try:
+            client = MongoClient(MONGODB_URI)
+            db = client["news_rt"]
+            
+            # Aggregate by source_domain
+            trends = (
+                batch_df
+                .groupBy("source_domain")
+                .agg(
+                    F.count("*").alias("article_count"),
+                    F.sum(F.when(F.col("sentiment") == "positive", 1).otherwise(0)).alias("positive_count"),
+                    F.sum(F.when(F.col("sentiment") == "negative", 1).otherwise(0)).alias("negative_count")
+                )
+                .collect()
+            )
+            
+            # Upsert to MongoDB
+            for row in trends:
+                db.rt_trends.update_one(
+                    {"source_domain": row["source_domain"]},
+                    {
+                        "$inc": {
+                            "article_count": row["article_count"],
+                            "positive_count": row["positive_count"],
+                            "negative_count": row["negative_count"]
+                        },
+                        "$set": {"updated_at": datetime.now()}
+                    },
+                    upsert=True
+                )
+            
+            # Store raw processed articles
+            articles = batch_df.limit(100).collect()
+            for row in articles:
+                db.processed_news.update_one(
+                    {"article_id": row["article_id"]},
+                    {"$set": {
+                        "source_domain": row["source_domain"],
+                        "title": row["title"],
+                        "sentiment": row["sentiment"],
+                        "process_time": datetime.now()
+                    }},
+                    upsert=True
+                )
+            
+            client.close()
+            print(f"Batch {batch_id}: wrote {len(trends)} trend updates, {len(articles)} articles to MongoDB")
+        except Exception as e:
+            print(f"Batch {batch_id}: MongoDB error: {e}")
+
+    # Start streaming query
+    print("Starting streaming query with 10-second trigger...")
+    query = (
+        processed.writeStream
+        .foreachBatch(write_to_mongo)
+        .option("checkpointLocation", "/tmp/checkpoints/news_streaming")
+        .trigger(processingTime="10 seconds")
+        .start()
+    )
+
+    print(f"Streaming query started: {query.id}")
+    print("Running continuously... Press Ctrl+C to stop")
+
+    # Run forever
+    query.awaitTermination()
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-streaming-job
+  namespace: news-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-streaming-job
+  template:
+    metadata:
+      labels:
+        app: spark-streaming-job
+    spec:
+      containers:
+        - name: spark-streaming
+          image: apache/spark:3.5.0-python3
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "Waiting for Kafka, MongoDB, and Cassandra to be ready..."
+              sleep 30
+              echo "Installing dependencies..."
+              pip install pymongo cassandra-driver --target=/tmp/pylibs --quiet 2>/dev/null || true
+              export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs"
+              export HOME=/tmp
+              mkdir -p /tmp/.ivy2 /tmp/spark-events
+              echo "Starting Spark Streaming Job in local mode..."
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --deploy-mode client \
+                --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+                --conf spark.driver.memory=512m \
+                --conf spark.pyspark.python=/usr/bin/python3 \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.eventLog.enabled=false \
+                /opt/spark-apps/spark_streaming_job.py
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: CASSANDRA_HOSTS
+              value: "cassandra"
+            - name: CASSANDRA_KEYSPACE
+              value: "news_rt"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://sr-service:8081"
+            - name: PYSPARK_PYTHON
+              value: "/usr/bin/python3"
+          volumeMounts:
+            - name: streaming-code
+              mountPath: /opt/spark-apps
+            - name: checkpoint-storage
+              mountPath: /tmp/checkpoints
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: streaming-code
+          configMap:
+            name: spark-streaming-code
+        - name: checkpoint-storage
+          emptyDir: {}
+      restartPolicy: Always
