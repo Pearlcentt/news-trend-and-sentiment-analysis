@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fresh-news-crawler
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+        - name: crawler
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install requests beautifulsoup4 pymongo feedparser --quiet
+              python3 << 'PYEND'
+              import feedparser
+              from pymongo import MongoClient
+              import hashlib
+              from datetime import datetime
+              import time as time_module
+              import requests
+
+              RSS_FEEDS = {
+                  'BBC': 'http://feeds.bbci.co.uk/news/rss.xml',
+                  'CNN': 'http://rss.cnn.com/rss/edition.rss',
+                  'Reuters': 'https://www.reutersagency.com/feed/',
+                  'NPR': 'https://feeds.npr.org/1001/rss.xml',
+                  'Guardian': 'https://www.theguardian.com/world/rss',
+              }
+
+              client = MongoClient('mongodb', 27017)
+              db = client['news_analytics']
+
+              # Use existing collection and update
+              collection = db['historical_articles']
+
+              print('='*50)
+              print('FRESH NEWS CRAWLER (English RSS)')
+              print('='*50)
+
+              total = 0
+              # 7 days ago cutoff (in milliseconds)
+              seven_days_ago = int((datetime.now().timestamp() - 7*24*60*60) * 1000)
+
+              for source, url in RSS_FEEDS.items():
+                  try:
+                      print(f'\nCrawling {source}...')
+                      feed = feedparser.parse(url)
+                      count = 0
+                      for entry in feed.entries[:10]:  # Check more entries, filter by date
+                          link = entry.get('link', '')
+                          summary = entry.get('summary', entry.get('description', ''))
+                          
+                          # Parse actual published date from RSS
+                          pub_date = entry.get('published_parsed') or entry.get('updated_parsed')
+                          if pub_date:
+                              pub_timestamp = int(time_module.mktime(pub_date) * 1000)
+                          else:
+                              pub_timestamp = int(datetime.now().timestamp() * 1000)
+                          
+                          # Skip articles older than 7 days
+                          if pub_timestamp < seven_days_ago:
+                              continue
+                          
+                          content = summary
+                          
+                          article = {
+                              'article_id': f"fresh_{hashlib.md5(link.encode()).hexdigest()[:12]}",
+                              'title': entry.get('title', ''),
+                              'url': link,
+                              'body_text': content[:5000] if content else '',
+                              'source_domain': source.lower() + '.com',
+                              'source': 'rss',
+                              'published_at': pub_timestamp,
+                              'event_time': pub_timestamp,
+                              'sentiment': 'neutral',
+                              'section': 'news',
+                              'crawled_at': datetime.now().isoformat(),
+                          }
+                          collection.update_one(
+                              {'article_id': article['article_id']}, 
+                              {'$set': article}, 
+                              upsert=True
+                          )
+                          count += 1
+                          total += 1
+                      print(f'  {source}: {count} articles saved')
+                  except Exception as e:
+                      print(f'  {source} error: {e}')
+
+              print(f'\n' + '='*50)
+              print(f'TOTAL: {total} fresh articles')
+              print(f'Collection count: {collection.count_documents({})}')
+              print('='*50)
+              client.close()
+              PYEND
+      restartPolicy: Never
+  backoffLimit: 2
