@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-sentiment-training
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+        - name: ml-trainer
+          image: bitnami/spark:3.5.3
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo numpy pandas scikit-learn --quiet
+
+              spark-submit \
+                --master spark://spark-master:7077 \
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0 \
+                --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
+                --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.ml_models \
+                /app/jobs/analytics/ml_pipeline.py \
+                --config /app/jobs/config/analytics-config.yaml
+
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /app/jobs
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: ml-pipeline-code
+      restartPolicy: Never
+  backoffLimit: 2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-pipeline-code
+  namespace: news-pipeline
+data:
+  note: |
+    This job uses the ml_pipeline.py from jobs/analytics/
+    For production, mount the actual Python files or build a Docker image.
