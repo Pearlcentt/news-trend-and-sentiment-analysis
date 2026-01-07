@@ -1,0 +1,98 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: news-pipeline
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # Update this to your actual repository URL
+    repoURL: https://github.com/YOUR_USERNAME/news-trend-and-sentiment-analysis.git
+    targetRevision: HEAD
+    path: k8s
+
+    # Optional: Specify which directory to sync
+    directory:
+      recurse: false
+      include: "*.yaml"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: news-pipeline
+
+  syncPolicy:
+    automated:
+      prune: true # Delete resources that are no longer in Git
+      selfHeal: true # Reconcile if someone manually changes resources
+      allowEmpty: false # Don't sync if directory is empty
+
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Resource health checks
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  # Custom health checks
+  info:
+    - name: Application
+      value: News Trend & Sentiment Analysis
+    - name: Owner
+      value: IT4931 Team
+---
+# Health check resource configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm-health-checks
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: argocd
+data:
+  # Custom health check for Spark jobs
+  resource.customizations.health.batch_Job: |
+    hs = {}
+    if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
+      hs.status = "Healthy"
+      hs.message = "Job completed successfully"
+    elseif obj.status.failed ~= nil and obj.status.failed > 0 then
+      hs.status = "Degraded"
+      hs.message = "Job failed"
+    elseif obj.status.active ~= nil and obj.status.active > 0 then
+      hs.status = "Progressing"
+      hs.message = "Job is running"
+    else
+      hs.status = "Progressing"
+      hs.message = "Job is pending"
+    end
+    return hs
+
+  # Custom health check for StatefulSets (Kafka, MongoDB)
+  resource.customizations.health.apps_StatefulSet: |
+    hs = {}
+    if obj.status.readyReplicas ~= nil and obj.status.readyReplicas == obj.spec.replicas then
+      hs.status = "Healthy"
+      hs.message = "All replicas ready"
+    elseif obj.status.currentReplicas ~= nil then
+      hs.status = "Progressing"
+      hs.message = "Waiting for replicas"
+    else
+      hs.status = "Degraded"
+      hs.message = "No replicas available"
+    end
+    return hs
