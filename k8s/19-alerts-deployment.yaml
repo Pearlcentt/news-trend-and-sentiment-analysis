@@ -1,0 +1,55 @@
+# Alert Consumer Deployment
+# Runs jobs/streaming/alert_consumer.py continuously
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-consumer
+  namespace: news-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-consumer
+  template:
+    metadata:
+      labels:
+        app: alert-consumer
+    spec:
+      containers:
+        - name: alert-consumer
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo --quiet
+              export PYTHONPATH="/opt/jobs"
+              python3 /opt/jobs/streaming/alert_consumer.py
+          env:
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: CHECK_INTERVAL
+              value: "60"
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /opt/jobs
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import pymongo; pymongo.MongoClient('mongodb://mongodb:27017').server_info()"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: spark-jobs-code
+      restartPolicy: Always
