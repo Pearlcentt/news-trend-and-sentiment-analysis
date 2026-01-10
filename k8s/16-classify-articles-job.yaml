@@ -1,0 +1,34 @@
+# Article Classification Job
+# Runs classification logic
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: classify-articles
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      containers:
+        - name: classifier
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo --quiet
+              export PYTHONPATH="/opt/jobs"
+              # Using ml_pipeline.py or similar for classification tasks
+              python3 /opt/jobs/analytics/ml_pipeline.py --task classify
+          env:
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /opt/jobs
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: spark-jobs-code
+      restartPolicy: Never
+  backoffLimit: 2

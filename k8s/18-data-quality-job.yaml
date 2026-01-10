@@ -1,0 +1,83 @@
+# Data Quality Check Job
+# Runs jobs/quality/checkpoint_runner.py for Great Expectations validation
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-quality-check
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+        - name: quality-checker
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo pandas pyspark --quiet
+              export PYTHONPATH="/opt/jobs"
+              python3 /opt/jobs/quality/checkpoint_runner.py
+          env:
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /opt/jobs
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: spark-jobs-code
+      restartPolicy: Never
+  backoffLimit: 2
+---
+# CronJob for scheduled quality checks
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-quality-hourly
+  namespace: news-pipeline
+spec:
+  schedule: "0 * * * *" # Run every hour
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: quality-checker
+              image: python:3.11-slim
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  pip install pymongo pandas --quiet
+                  export PYTHONPATH="/opt/jobs"
+                  python3 /opt/jobs/quality/checkpoint_runner.py
+              env:
+                - name: MONGODB_URI
+                  value: "mongodb://mongodb:27017"
+              volumeMounts:
+                - name: jobs-code
+                  mountPath: /opt/jobs
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+          volumes:
+            - name: jobs-code
+              configMap:
+                name: spark-jobs-code
+          restartPolicy: OnFailure

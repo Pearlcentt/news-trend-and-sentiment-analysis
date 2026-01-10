@@ -1,0 +1,43 @@
+# ML Training Job
+# Runs jobs/analytics/ml_pipeline.py for model training
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-sentiment-training
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+        - name: ml-trainer
+          image: bitnami/spark:3.5.3
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo numpy pandas scikit-learn --quiet
+              export PYTHONPATH="/opt/jobs"
+              spark-submit \
+                --master spark://spark-master:7077 \
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0 \
+                --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
+                --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.ml_models \
+                /opt/jobs/analytics/ml_pipeline.py \
+                --config /opt/jobs/config/analytics-config.yaml
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /opt/jobs
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: spark-jobs-code
+      restartPolicy: Never
+  backoffLimit: 2
