@@ -14,6 +14,7 @@ from typing import Dict, List, Any, Optional
 from pymongo import MongoClient
 import time
 import logging
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -85,8 +86,8 @@ class AlertThresholds:
 class AlertStore:
     """Store alerts in MongoDB"""
     
-    def __init__(self, uri: str = "mongodb://mongodb:27017"):
-        self.client = MongoClient(uri)
+    def __init__(self, uri: str = None):
+        self.client = MongoClient(uri or os.getenv("MONGODB_URI", "mongodb://mongodb:27017"))
         self.db = self.client["news_rt"]
         self.collection = self.db["alerts"]
     
@@ -115,8 +116,9 @@ class AlertStore:
 class AlertDetector:
     """Detects alerts based on pipeline metrics"""
     
-    def __init__(self, mongodb_uri: str = "mongodb://mongodb:27017"):
-        self.client = MongoClient(mongodb_uri)
+    def __init__(self, mongodb_uri: str = None):
+        uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://mongodb:27017")
+        self.client = MongoClient(uri)
         self.analytics_db = self.client["news_analytics"]
         self.rt_db = self.client["news_rt"]
         self.thresholds = AlertThresholds()
@@ -250,10 +252,11 @@ class AlertConsumer:
     Main alert consumer that runs continuously
     """
     
-    def __init__(self, mongodb_uri: str = "mongodb://mongodb:27017",
+    def __init__(self, mongodb_uri: str = None,
                  check_interval_seconds: int = 60):
-        self.detector = AlertDetector(mongodb_uri)
-        self.store = AlertStore(mongodb_uri)
+        uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://mongodb:27017")
+        self.detector = AlertDetector(uri)
+        self.store = AlertStore(uri)
         self.check_interval = check_interval_seconds
         self.running = False
     
