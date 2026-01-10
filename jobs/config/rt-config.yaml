@@ -2,27 +2,30 @@ kafka:
   bootstrap_servers: "kafka-broker:9092"
   input_topic: "news_raw"
   output_topic: "news_processed"
-  starting_offsets: "earliest"
+  starting_offsets: "latest"
 schemas:
-  news_raw: "../../schemas/news_raw.avsc"
-  news_processed: "../../schemas/news_processed.avsc"
+  # These paths work in K8s when mounted from ConfigMap
+  # For local: override via environment or use absolute paths
+  news_raw: "/tmp/jobs/schemas/news_raw.avsc"
+  news_processed: "/tmp/jobs/schemas/news_processed.avsc"
   processed_schema_version: 2
 spark:
-  shuffle_partitions: 200
+  shuffle_partitions: 4
   log_level: "WARN"
-  adaptive_enabled: true
+  adaptive_enabled: false
   auto_broadcast_join_threshold: 134217728
 streaming:
   watermark: "5 minutes"
   window_duration: "10 minutes"
   window_slide: "5 minutes"
-  checkpoint_news_processed: "hdfs:///checkpoints/news_processed"
-  checkpoint_rt_trends: "hdfs:///checkpoints/rt_trends"
-  checkpoint_rt_sentiment: "hdfs:///checkpoints/rt_sentiment"
-  checkpoint_rt_topic_pivot: "hdfs:///checkpoints/rt_topic_pivot"
-  checkpoint_rt_topic_totals: "hdfs:///checkpoints/rt_topic_totals"
+  # Local checkpoints (works in K8s and local)
+  checkpoint_news_processed: "/tmp/checkpoints/news_processed"
+  checkpoint_rt_trends: "/tmp/checkpoints/rt_trends"
+  checkpoint_rt_sentiment: "/tmp/checkpoints/rt_sentiment"
+  checkpoint_rt_topic_pivot: "/tmp/checkpoints/rt_topic_pivot"
+  checkpoint_rt_topic_totals: "/tmp/checkpoints/rt_topic_totals"
 mongo:
   uri: "mongodb://mongodb:27017"
   database: "news_rt"
 reference_data:
-  source_metadata: "../../jobs/reference/source_metadata.json"
+  source_metadata: "/tmp/jobs/source_metadata.json"
