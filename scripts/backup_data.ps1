@@ -7,10 +7,13 @@ if (!(Test-Path -Path $backupDir)) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$outputFile = "$backupDir\news_data_$timestamp.json"
+Write-Host "Backing up 'historical_articles'..."
+kubectl exec -n news-pipeline deployment/mongodb -- mongoexport --db news_analytics --collection historical_articles --jsonArray > "$backupDir\historical_articles_$timestamp.json"
 
-Write-Host "Backing up 'historical_articles' from k8s..."
-kubectl exec -n news-pipeline deployment/mongodb -- mongoexport --db news_analytics --collection historical_articles --jsonArray > $outputFile
+Write-Host "Backing up 'processed_news' (RT)..."
+kubectl exec -n news-pipeline deployment/mongodb -- mongoexport --db news_rt --collection processed_news --jsonArray > "$backupDir\processed_news_$timestamp.json"
 
-Write-Host "Backup complete: $outputFile"
-Write-Host "You can share this JSON file with others."
+Write-Host "Backing up 'rt_trends'..."
+kubectl exec -n news-pipeline deployment/mongodb -- mongoexport --db news_rt --collection rt_trends --jsonArray > "$backupDir\rt_trends_$timestamp.json"
+
+Write-Host "Backup complete. Files saved to $backupDir"
