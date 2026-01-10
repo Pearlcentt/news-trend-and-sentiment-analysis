@@ -41,10 +41,17 @@ def create_source_entity_graph(articles_df: DataFrame, spark: SparkSession):
     try:
         from graphframes import GraphFrame
     except ImportError:
-        print("WARNING: graphframes not installed. Install with:")
-        print("  pip install graphframes")
-        print("  # or for Spark: --packages graphframes:graphframes:0.8.3-spark3.5-s_2.12")
-        return None, None, None
+        import warnings
+        warnings.warn(
+            "graphframes not installed. Graph analytics will return empty results. "
+            "Install with: pip install graphframes or "
+            "--packages graphframes:graphframes:0.8.3-spark3.5-s_2.12",
+            ImportWarning
+        )
+        # Return empty DataFrames with expected schema for graceful degradation
+        empty_vertices = spark.createDataFrame([], "id STRING, type STRING")
+        empty_edges = spark.createDataFrame([], "src STRING, dst STRING, weight DOUBLE")
+        return empty_vertices, empty_edges, None
     
     # Extract source vertices
     source_vertices = (
