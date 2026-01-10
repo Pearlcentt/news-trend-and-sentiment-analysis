@@ -1,0 +1,15 @@
+[
+  {"source_domain": "techcrunch.com", "region": "US", "tier": "tier1", "credibility_score": 0.95, "priority_weight": 0.9},
+  {"source_domain": "arstechnica.com", "region": "US", "tier": "tier1", "credibility_score": 0.92, "priority_weight": 0.85},
+  {"source_domain": "wired.com", "region": "US", "tier": "tier1", "credibility_score": 0.90, "priority_weight": 0.85},
+  {"source_domain": "theverge.com", "region": "US", "tier": "tier1", "credibility_score": 0.88, "priority_weight": 0.8},
+  {"source_domain": "bbc.co.uk", "region": "UK", "tier": "tier1", "credibility_score": 0.95, "priority_weight": 0.95},
+  {"source_domain": "bbci.co.uk", "region": "UK", "tier": "tier1", "credibility_score": 0.95, "priority_weight": 0.95},
+  {"source_domain": "theguardian.com", "region": "UK", "tier": "tier1", "credibility_score": 0.92, "priority_weight": 0.9},
+  {"source_domain": "reuters.com", "region": "US", "tier": "tier1", "credibility_score": 0.98, "priority_weight": 0.98},
+  {"source_domain": "reutersagency.com", "region": "US", "tier": "tier1", "credibility_score": 0.98, "priority_weight": 0.98},
+  {"source_domain": "cnn.com", "region": "US", "tier": "tier1", "credibility_score": 0.85, "priority_weight": 0.8},
+  {"source_domain": "espn.com", "region": "US", "tier": "tier2", "credibility_score": 0.90, "priority_weight": 0.7},
+  {"source_domain": "sciencedaily.com", "region": "US", "tier": "tier2", "credibility_score": 0.88, "priority_weight": 0.75},
+  {"source_domain": "variety.com", "region": "US", "tier": "tier2", "credibility_score": 0.85, "priority_weight": 0.7}
+]
