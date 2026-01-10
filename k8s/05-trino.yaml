@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino
+  namespace: news-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+  template:
+    metadata:
+      labels:
+        app: trino
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:439
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: trino-catalog
+              mountPath: /etc/trino/catalog
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+      volumes:
+        - name: trino-catalog
+          configMap:
+            name: trino-catalogs
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-catalogs
+  namespace: news-pipeline
+data:
+  mongodb.properties: |
+    connector.name=mongodb
+    mongodb.connection-url=mongodb://mongodb:27017
+    mongodb.schema-collection=_schema
+  kafka.properties: |
+    connector.name=kafka
+    kafka.nodes=kafka-broker:9092
+    kafka.table-description-supplier=confluent
+    kafka.confluent-schema-registry-url=http://sr-service:8081
+    kafka.default-schema=news_pipeline
+    kafka.hide-internal-columns=false
+  tpch.properties: |
+    connector.name=tpch
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+  namespace: news-pipeline
+spec:
+  selector:
+    app: trino
+  ports:
+    - port: 8080
+      targetPort: 8080
