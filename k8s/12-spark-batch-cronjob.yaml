@@ -1,0 +1,134 @@
+# Spark Batch CronJob - Daily Processing
+# Runs jobs/batch/batch_pipeline.py on a schedule
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: spark-batch-job
+  namespace: news-pipeline
+spec:
+  schedule: "0 2 * * *" # Run at 2 AM daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: spark-batch
+              image: apache/spark:3.5.0-python3
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  echo "Installing Python dependencies..."
+                  pip install pymongo pyyaml --target=/tmp/pylibs --quiet 2>/dev/null || true
+                  export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/opt/spark-jobs"
+                  export HOME=/tmp
+                  mkdir -p /tmp/.ivy2
+
+                  echo "Starting Spark Batch Pipeline..."
+                  /opt/spark/bin/spark-submit \
+                    --master local[2] \
+                    --deploy-mode client \
+                    --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+                    --conf spark.driver.memory=512m \
+                    --conf spark.pyspark.python=/usr/bin/python3 \
+                    --conf spark.jars.ivy=/tmp/.ivy2 \
+                    /opt/spark-jobs/batch/batch_pipeline.py \
+                    --config /opt/spark-jobs/config/batch-config.yaml \
+                    --mode k8s
+              env:
+                - name: KAFKA_BOOTSTRAP_SERVERS
+                  value: "kafka-broker:9092"
+                - name: MONGODB_URI
+                  value: "mongodb://mongodb:27017"
+                - name: MINIO_ENDPOINT
+                  value: "http://minio:9000"
+                - name: MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: MINIO_ROOT_USER
+                - name: MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: MINIO_ROOT_PASSWORD
+                - name: PYSPARK_PYTHON
+                  value: "/usr/bin/python3"
+              volumeMounts:
+                - name: spark-jobs
+                  mountPath: /opt/spark-jobs
+                - name: schemas
+                  mountPath: /opt/spark-jobs/schemas
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1"
+          volumes:
+            - name: spark-jobs
+              configMap:
+                name: spark-jobs-code
+            - name: schemas
+              configMap:
+                name: avro-schemas
+          restartPolicy: OnFailure
+---
+# Manual Job to run batch immediately
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-batch-manual
+  namespace: news-pipeline
+spec:
+  template:
+    spec:
+      containers:
+        - name: spark-batch
+          image: apache/spark:3.5.0-python3
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install pymongo pyyaml --target=/tmp/pylibs --quiet 2>/dev/null || true
+              export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/opt/spark-jobs"
+              export HOME=/tmp
+              mkdir -p /tmp/.ivy2
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+                --conf spark.driver.memory=512m \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                /opt/spark-jobs/batch/batch_pipeline.py \
+                --mode k8s
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: MINIO_ENDPOINT
+              value: "http://minio:9000"
+          volumeMounts:
+            - name: spark-jobs
+              mountPath: /opt/spark-jobs
+            - name: schemas
+              mountPath: /opt/spark-jobs/schemas
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-code
+        - name: schemas
+          configMap:
+            name: avro-schemas
+      restartPolicy: Never
+  backoffLimit: 2

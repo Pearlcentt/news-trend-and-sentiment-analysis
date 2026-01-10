@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-config
+  namespace: news-pipeline
+data:
+  AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-broker:9092"
+  MONGODB_HOST: "mongodb"
+  SPARK_MASTER: "spark://spark-master:7077"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow
+  namespace: news-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+  template:
+    metadata:
+      labels:
+        app: airflow
+    spec:
+      containers:
+        - name: airflow-webserver
+          image: apache/airflow:2.7.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              airflow db init
+              airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
+              # Start scheduler in background
+              airflow scheduler &
+              # Start webserver in foreground (keeps container alive)
+              exec airflow webserver --port 8080
+          ports:
+            - containerPort: 8080
+              name: webserver
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: "SequentialExecutor"
+            - name: AIRFLOW__CORE__LOAD_EXAMPLES
+              value: "false"
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              value: "sqlite:////opt/airflow/airflow.db"
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              value: "news-pipeline-secret-key-fix"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: MONGODB_HOST
+              value: "mongodb"
+            - name: SPARK_MASTER
+              value: "spark://spark-master:7077"
+            - name: AIRFLOW__CORE__DAGS_FOLDER
+              value: "/app/dags"
+          volumeMounts:
+            - name: dags-volume
+              mountPath: /app/dags/news_crawler_dag.py
+              subPath: news_crawler_dag.py
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            failureThreshold: 10
+      volumes:
+        - name: dags-volume
+          configMap:
+            name: airflow-dags
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow
+  namespace: news-pipeline
+spec:
+  type: NodePort
+  selector:
+    app: airflow
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+      name: webserver
+# NOTE: The airflow-dags ConfigMap is created by deploy.ps1 from airflow/dags/news_crawler_dag.py
+# This ensures the local DAG file is the single source of truth

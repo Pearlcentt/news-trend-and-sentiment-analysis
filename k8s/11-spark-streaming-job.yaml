@@ -1,0 +1,165 @@
+# Spark Streaming Job Deployment
+# Runs jobs/streaming/streaming_pipeline.py continuously
+# Uses ConfigMap to mount the Python code from jobs/ folder
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-jobs-config
+  namespace: news-pipeline
+data:
+  # Environment detection for the pipeline
+  PIPELINE_MODE: "k8s"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-streaming-job
+  namespace: news-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-streaming-job
+  template:
+    metadata:
+      labels:
+        app: spark-streaming-job
+    spec:
+      initContainers:
+        # Clone/copy the jobs code (in production, use a proper image with code baked in)
+        - name: setup-code
+          image: busybox:1.36
+          command:
+            [
+              "sh",
+              "-c",
+              'echo "Jobs code will be mounted from PVC or baked into image"',
+            ]
+      containers:
+        - name: spark-streaming
+          image: apache/spark:3.5.0-python3
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "Installing Python dependencies..."
+              pip install pymongo pyyaml --target=/tmp/pylibs --quiet 2>/dev/null || true
+
+              # Create directory structure
+              mkdir -p /tmp/.ivy2 /tmp/spark-events /tmp/checkpoints
+              mkdir -p /tmp/jobs/schemas
+
+              # Copy files from ConfigMap to writable location
+              cp /opt/spark-jobs/streaming_pipeline.py /tmp/jobs/
+              cp /opt/spark-jobs/rt-config.yaml /tmp/jobs/
+
+              # Copy schema files (stored flat in ConfigMap)
+              cp /opt/spark-jobs/news_raw.avsc /tmp/jobs/schemas/
+              cp /opt/spark-jobs/news_processed.avsc /tmp/jobs/schemas/
+
+              export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/tmp/jobs"
+              export HOME=/tmp
+
+              echo "Starting Spark Streaming Pipeline..."
+              /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --deploy-mode client \
+                --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+                --conf spark.driver.memory=1g \
+                --conf spark.pyspark.python=/usr/bin/python3 \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.eventLog.enabled=false \
+                --conf spark.sql.shuffle.partitions=4 \
+                /tmp/jobs/streaming_pipeline.py \
+                --config /tmp/jobs/rt-config.yaml \
+                --mode k8s
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://sr-service:8081"
+            - name: MINIO_ENDPOINT
+              value: "http://minio:9000"
+            - name: PYSPARK_PYTHON
+              value: "/usr/bin/python3"
+          volumeMounts:
+            - name: spark-jobs
+              mountPath: /opt/spark-jobs
+            - name: schemas
+              mountPath: /opt/spark-jobs/schemas
+            - name: checkpoint-storage
+              mountPath: /tmp/checkpoints
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+      volumes:
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-code
+        - name: schemas
+          configMap:
+            name: avro-schemas
+        - name: checkpoint-storage
+          emptyDir: {}
+      restartPolicy: Always
+---
+# ConfigMap containing the actual Python code
+# In production, bake this into a Docker image instead
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: avro-schemas
+  namespace: news-pipeline
+data:
+  news_raw.avsc: |
+    {
+      "type": "record",
+      "name": "NewsRaw",
+      "namespace": "com.newspipeline.avro",
+      "fields": [
+        {"name": "article_id", "type": "string"},
+        {"name": "source_domain", "type": ["null", "string"], "default": null},
+        {"name": "title", "type": ["null", "string"], "default": null},
+        {"name": "body_text", "type": ["null", "string"], "default": null},
+        {"name": "published_at", "type": ["null", "long"], "default": null},
+        {"name": "event_time", "type": ["null", "long"], "default": null},
+        {"name": "ingest_time", "type": ["null", "long"], "default": null},
+        {"name": "language", "type": ["null", "string"], "default": null},
+        {"name": "content_hash_md5", "type": ["null", "string"], "default": null}
+      ]
+    }
+  news_processed.avsc: |
+    {
+      "type": "record",
+      "name": "NewsProcessed",
+      "namespace": "com.newspipeline.avro",
+      "fields": [
+        {"name": "article_id", "type": "string"},
+        {"name": "source_domain", "type": ["null", "string"], "default": null},
+        {"name": "published_at", "type": ["null", "long"], "default": null},
+        {"name": "language", "type": ["null", "string"], "default": null},
+        {"name": "sentiment", "type": {"type": "record", "name": "Sentiment", "fields": [
+          {"name": "label", "type": "string"},
+          {"name": "polarity", "type": "double"}
+        ]}},
+        {"name": "keywords", "type": {"type": "array", "items": {"type": "record", "name": "Keyword", "fields": [
+          {"name": "term", "type": "string"},
+          {"name": "score", "type": "double"}
+        ]}}},
+        {"name": "entities", "type": {"type": "array", "items": {"type": "record", "name": "Entity", "fields": [
+          {"name": "type", "type": "string"},
+          {"name": "text", "type": "string"},
+          {"name": "norm", "type": "string"}
+        ]}}},
+        {"name": "topics", "type": {"type": "array", "items": {"type": "record", "name": "Topic", "fields": [
+          {"name": "topic_id", "type": "int"},
+          {"name": "score", "type": "double"}
+        ]}}}
+      ]
+    }

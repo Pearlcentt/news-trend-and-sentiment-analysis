@@ -1,0 +1,40 @@
+# Fresh News Crawler Job
+# Runs crawler/news_crawler.py for recent news
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fresh-news-crawler
+  namespace: news-pipeline
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      containers:
+        - name: crawler
+          image: python:3.11-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install requests beautifulsoup4 pymongo feedparser --quiet
+              export PYTHONPATH="/app"
+              python3 /app/crawler/news_crawler.py --mode fresh
+          env:
+            - name: MONGODB_URI
+              value: "mongodb://mongodb:27017"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+          volumeMounts:
+            - name: crawler-code
+              mountPath: /app/crawler
+            - name: schemas
+              mountPath: /app/schemas
+      volumes:
+        - name: crawler-code
+          configMap:
+            name: crawler-code
+        - name: schemas
+          configMap:
+            name: avro-schemas
+      restartPolicy: Never
+  backoffLimit: 2
