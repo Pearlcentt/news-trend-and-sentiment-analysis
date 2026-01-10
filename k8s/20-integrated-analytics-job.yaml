@@ -1,11 +1,11 @@
-# Historical Data Processing Job
-# Processes historical articles: sentiment analysis and keyword extraction
-# Uses jobs/batch/batch_pipeline.py for Spark-based processing
+# Advanced Aggregations Job
+# Runs complex window functions and pivot tables
+# Uses jobs/analytics/advanced_aggregations.py
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: process-historical-data
+  name: integrated-analytics
   namespace: news-pipeline
 spec:
   ttlSecondsAfterFinished: 7200
@@ -17,16 +17,15 @@ spec:
           command: ["/bin/bash", "-c"]
           args:
             - |
-              pip install pymongo pyyaml --quiet
+              pip install pymongo pyyaml pandas pyarrow --quiet
               export PYTHONPATH="/opt/jobs"
               spark-submit \
                 --master local[2] \
-                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0 \
-                --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
-                --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.processed_articles \
-                /opt/jobs/batch/batch_pipeline.py \
-                --config /opt/jobs/config/batch-config.yaml \
-                --mode k8s
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0,graphframes:graphframes:0.8.3-spark3.5-s_2.12 \
+                --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.processed_articles \
+                --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.aggregations \
+                /opt/jobs/analytics/advanced_aggregations.py \
+                --config /opt/jobs/config/analytics-config.yaml
           env:
             - name: MONGODB_URI
               value: "mongodb://mongodb:27017"
@@ -35,10 +34,10 @@ spec:
               mountPath: /opt/jobs
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
               memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
               cpu: "1"
       volumes:
         - name: jobs-code

@@ -1,13 +1,13 @@
-# Historical Backfill Job
-# Runs crawler/historical_crawler.py for past data
+# Fresh News Crawler Job
+# Runs crawler/news_crawler.py for recent news
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: historical-backfill-jan2025
+  name: fresh-news-crawler
   namespace: news-pipeline
 spec:
-  ttlSecondsAfterFinished: 86400 # Keep logs for 24h
+  ttlSecondsAfterFinished: 3600
   template:
     spec:
       containers:
@@ -18,19 +18,23 @@ spec:
             - |
               pip install requests beautifulsoup4 pymongo feedparser --quiet
               export PYTHONPATH="/app"
-              echo "Starting Historical Backfill (Jan 1, 2025 to Now)..."
-              python3 /app/crawler/historical_crawler.py --start-date 2025-01-01 --end-date 2025-12-31 --per-day 50 --output mongodb
+              python3 /app/crawler/news_crawler.py --mode fresh
           env:
             - name: MONGODB_URI
               value: "mongodb://mongodb:27017"
-            - name: PYTHONUNBUFFERED
-              value: "1"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
           volumeMounts:
             - name: crawler-code
               mountPath: /app/crawler
+            - name: schemas
+              mountPath: /app/schemas
       volumes:
         - name: crawler-code
           configMap:
             name: crawler-code
+        - name: schemas
+          configMap:
+            name: avro-schemas
       restartPolicy: Never
   backoffLimit: 2

@@ -1,3 +1,6 @@
+# Alert Consumer Deployment
+# Runs jobs/streaming/alert_consumer.py continuously
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,169 +23,16 @@ spec:
           args:
             - |
               pip install pymongo --quiet
-              python3 << 'PYEND'
-              """
-              Real-time Alert Consumer
-              Monitors news pipeline for alerts and anomalies
-              """
-              from datetime import datetime, timedelta
-              from typing import Dict, List, Any, Optional
-              from pymongo import MongoClient
-              import time
-              import logging
-              import os
-
-              logging.basicConfig(
-                  level=logging.INFO,
-                  format='%(asctime)s - %(levelname)s - %(message)s'
-              )
-              LOG = logging.getLogger("AlertConsumer")
-
-              class AlertType:
-                  BREAKING_NEWS = "breaking_news"
-                  SENTIMENT_SPIKE = "sentiment_spike"
-                  DATA_QUALITY = "data_quality"
-                  SOURCE_DOWN = "source_down"
-                  HIGH_VOLUME = "high_volume"
-
-              class Alert:
-                  def __init__(self, alert_type, severity, message, details=None):
-                      self.alert_type = alert_type
-                      self.severity = severity
-                      self.message = message
-                      self.details = details or {}
-                      self.timestamp = datetime.now()
-                  
-                  def to_dict(self):
-                      return {
-                          "alert_type": self.alert_type,
-                          "severity": self.severity,
-                          "message": self.message,
-                          "details": self.details,
-                          "timestamp": self.timestamp
-                      }
-                  
-                  def log(self):
-                      icons = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
-                      icon = icons.get(self.severity, "📢")
-                      LOG.info(f"{icon} [{self.severity.upper()}] {self.alert_type}: {self.message}")
-
-              class AlertDetector:
-                  def __init__(self, mongodb_uri):
-                      self.client = MongoClient(mongodb_uri)
-                      self.analytics_db = self.client["news_analytics"]
-                      self.rt_db = self.client["news_rt"]
-                  
-                  def check_all(self):
-                      alerts = []
-                      alerts.extend(self.check_article_velocity())
-                      alerts.extend(self.check_sentiment_distribution())
-                      alerts.extend(self.check_data_quality())
-                      return alerts
-                  
-                  def check_article_velocity(self):
-                      alerts = []
-                      one_hour_ago = datetime.now() - timedelta(hours=1)
-                      one_hour_ago_ts = int(one_hour_ago.timestamp() * 1000)
-                      
-                      recent_count = self.analytics_db.historical_articles.count_documents({
-                          "event_time": {"$gte": one_hour_ago_ts}
-                      })
-                      
-                      if recent_count >= 100:
-                          alerts.append(Alert(
-                              "high_volume", "warning",
-                              f"High article volume: {recent_count} articles/hour",
-                              {"count": recent_count}
-                          ))
-                      elif recent_count >= 50:
-                          alerts.append(Alert(
-                              "breaking_news", "info", 
-                              f"Elevated volume: {recent_count} articles/hour",
-                              {"count": recent_count}
-                          ))
-                      return alerts
-                  
-                  def check_sentiment_distribution(self):
-                      alerts = []
-                      pipeline = [
-                          {"$match": {"sentiment": {"$exists": True}}},
-                          {"$group": {"_id": "$sentiment", "count": {"$sum": 1}}}
-                      ]
-                      results = list(self.analytics_db.historical_articles.aggregate(pipeline))
-                      
-                      total = sum(r["count"] for r in results)
-                      if total == 0:
-                          return alerts
-                      
-                      sentiment_pcts = {r["_id"]: r["count"] / total for r in results}
-                      negative_pct = sentiment_pcts.get("negative", 0)
-                      
-                      if negative_pct >= 0.30:
-                          alerts.append(Alert(
-                              "sentiment_spike", "warning",
-                              f"Negative sentiment spike: {negative_pct:.1%}",
-                              {"negative_percentage": negative_pct}
-                          ))
-                      return alerts
-                  
-                  def check_data_quality(self):
-                      alerts = []
-                      quality = self.rt_db.data_quality_results.find_one(sort=[("run_time", -1)])
-                      
-                      if quality and not quality.get("success", True):
-                          alerts.append(Alert(
-                              "data_quality", "critical",
-                              "Data quality check failed",
-                              quality.get("statistics", {})
-                          ))
-                      return alerts
-
-              class AlertStore:
-                  def __init__(self, mongodb_uri):
-                      self.client = MongoClient(mongodb_uri)
-                      self.collection = self.client["news_rt"]["alerts"]
-                  
-                  def store(self, alert):
-                      self.collection.insert_one(alert.to_dict())
-
-              def main():
-                  mongodb_uri = os.environ.get("MONGODB_URI", "mongodb://mongodb:27017")
-                  check_interval = int(os.environ.get("CHECK_INTERVAL", "60"))
-                  
-                  detector = AlertDetector(mongodb_uri)
-                  store = AlertStore(mongodb_uri)
-                  
-                  LOG.info("="*60)
-                  LOG.info("🔔 ALERT CONSUMER STARTED")
-                  LOG.info(f"   Check interval: {check_interval}s")
-                  LOG.info("="*60)
-                  
-                  while True:
-                      try:
-                          LOG.info("🔍 Running alert checks...")
-                          alerts = detector.check_all()
-                          
-                          if alerts:
-                              LOG.info(f"📢 {len(alerts)} alert(s) detected")
-                              for alert in alerts:
-                                  alert.log()
-                                  store.store(alert)
-                          else:
-                              LOG.info("✅ No alerts - system healthy")
-                      except Exception as e:
-                          LOG.error(f"Error: {e}")
-                      
-                      time.sleep(check_interval)
-
-              if __name__ == "__main__":
-                  main()
-              PYEND
+              export PYTHONPATH="/opt/jobs"
+              python3 /opt/jobs/streaming/alert_consumer.py
           env:
             - name: MONGODB_URI
               value: "mongodb://mongodb:27017"
             - name: CHECK_INTERVAL
               value: "60"
+          volumeMounts:
+            - name: jobs-code
+              mountPath: /opt/jobs
           resources:
             requests:
               memory: "128Mi"
@@ -198,4 +48,8 @@ spec:
                 - "import pymongo; pymongo.MongoClient('mongodb://mongodb:27017').server_info()"
             initialDelaySeconds: 30
             periodSeconds: 60
+      volumes:
+        - name: jobs-code
+          configMap:
+            name: spark-jobs-code
       restartPolicy: Always

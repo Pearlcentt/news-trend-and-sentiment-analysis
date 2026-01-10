@@ -1,3 +1,6 @@
+# ML Training Job
+# Runs jobs/analytics/ml_pipeline.py for model training
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -14,18 +17,17 @@ spec:
           args:
             - |
               pip install pymongo numpy pandas scikit-learn --quiet
-
+              export PYTHONPATH="/opt/jobs"
               spark-submit \
                 --master spark://spark-master:7077 \
                 --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0 \
                 --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
                 --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.ml_models \
-                /app/jobs/analytics/ml_pipeline.py \
-                --config /app/jobs/config/analytics-config.yaml
-
+                /opt/jobs/analytics/ml_pipeline.py \
+                --config /opt/jobs/config/analytics-config.yaml
           volumeMounts:
             - name: jobs-code
-              mountPath: /app/jobs
+              mountPath: /opt/jobs
           resources:
             requests:
               memory: "1Gi"
@@ -36,16 +38,6 @@ spec:
       volumes:
         - name: jobs-code
           configMap:
-            name: ml-pipeline-code
+            name: spark-jobs-code
       restartPolicy: Never
   backoffLimit: 2
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ml-pipeline-code
-  namespace: news-pipeline
-data:
-  note: |
-    This job uses the ml_pipeline.py from jobs/analytics/
-    For production, mount the actual Python files or build a Docker image.
