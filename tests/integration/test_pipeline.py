@@ -13,6 +13,13 @@ import pyspark.sql.functions as F
 @pytest.fixture(scope="module")
 def spark():
     """Create Spark session for integration tests."""
+    import sys
+    import os
+    # Ensure jobs/ is in path
+    jobs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../jobs'))
+    if jobs_path not in sys.path:
+        sys.path.insert(0, jobs_path)
+        
     spark = (
         SparkSession.builder
         .master("local[2]")

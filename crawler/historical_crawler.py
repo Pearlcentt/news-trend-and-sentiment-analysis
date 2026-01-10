@@ -222,8 +222,8 @@ class WaybackCrawler:
             "to": end_date.strftime("%Y%m%d"),
             "output": "json",
             "limit": str(limit),
-            "filter": "statuscode:200",
-            "filter": "mimetype:text/html",
+            # Fixed: Use list for multiple filter values (was overwriting)
+            "filter": ["statuscode:200", "mimetype:text/html"],
         }
         
         try:
@@ -375,16 +375,20 @@ class HistoricalDataStorage:
         try:
             db = self.mongo_client["news_analytics"]
             
-            # Insert articles
+            # Insert articles using bulk operations for efficiency
             if articles:
-                # Use upsert to avoid duplicates
-                for article in articles:
-                    db.historical_articles.update_one(
+                from pymongo import UpdateOne
+                # Build bulk operations (single DB round-trip instead of N)
+                operations = [
+                    UpdateOne(
                         {"article_id": article["article_id"]},
                         {"$set": article},
                         upsert=True
                     )
-                LOG.info(f"Stored {len(articles)} articles to MongoDB")
+                    for article in articles
+                ]
+                result = db.historical_articles.bulk_write(operations, ordered=False)
+                LOG.info(f"Stored {result.upserted_count + result.modified_count} articles to MongoDB (bulk)")
             
             # Update stats
             self._update_stats(db)
@@ -468,19 +472,25 @@ class HistoricalDataStorage:
             LOG.error(f"Error updating realtime db: {e}")
     
     def _simple_sentiment(self, text: str) -> str:
-        """Simple sentiment analysis"""
-        if not text:
-            return "neutral"
-        text_lower = text.lower()
-        pos_words = ["surge", "rise", "gain", "growth", "success", "profit", "win", "positive"]
-        neg_words = ["fall", "drop", "decline", "crash", "crisis", "loss", "fail", "negative"]
-        pos = sum(1 for w in pos_words if w in text_lower)
-        neg = sum(1 for w in neg_words if w in text_lower)
-        if pos > neg:
-            return "positive"
-        elif neg > pos:
-            return "negative"
-        return "neutral"
+        """Simple sentiment analysis using shared module."""
+        # Import from unified sentiment module for consistency
+        try:
+            import sys
+            from pathlib import Path
+            # Add jobs directory to path
+            jobs_path = Path(__file__).parent.parent / "jobs"
+            if str(jobs_path) not in sys.path:
+                sys.path.insert(0, str(jobs_path))
+            from utils.sentiment import simple_sentiment_label
+            return simple_sentiment_label(text)
+        except ImportError:
+            # Fallback if jobs module not available (standalone crawler)
+            if not text:
+                return "neutral"
+            text_lower = text.lower()
+            pos = sum(1 for w in ["surge", "rise", "gain", "growth", "success", "profit", "win", "positive"] if w in text_lower)
+            neg = sum(1 for w in ["fall", "drop", "decline", "crash", "crisis", "loss", "fail", "negative"] if w in text_lower)
+            return "positive" if pos > neg else "negative" if neg > pos else "neutral"
     
     def _store_json(self, articles: List[Dict[str, Any]]):
         """Store to JSON file"""

@@ -76,8 +76,25 @@ def _extract_main_text(soup: BeautifulSoup) -> str:
     return " ".join(p.get_text(" ", strip=True) for p in soup.find_all("p")).strip()
 
 
-def fetch_article_body(url: str, timeout: int = 10) -> Dict[str, Any]:
-    """Fetch article body text; return minimal metadata on HTTP failures."""
+def fetch_article_body(
+    url: str, 
+    timeout: int = 10,
+    verify_ssl: bool = True,
+    rate_limit_delay: float = 0.0
+) -> Dict[str, Any]:
+    """
+    Fetch article body text with optional SSL verification and rate limiting.
+    
+    Args:
+        url: Article URL to fetch
+        timeout: Request timeout in seconds
+        verify_ssl: Whether to verify SSL certificates (default: True)
+        rate_limit_delay: Delay after request for rate limiting (default: 0)
+    """
+    # Rate limiting - respect API limits
+    if rate_limit_delay > 0:
+        time.sleep(rate_limit_delay)
+    
     response = requests.get(
         url,
         timeout=timeout,
@@ -85,6 +102,7 @@ def fetch_article_body(url: str, timeout: int = 10) -> Dict[str, Any]:
             "User-Agent": "Mozilla/5.0 (compatible; NewsCrawler/1.0; +https://example.com/bot)",
             "Accept-Language": "en-US,en;q=0.8",
         },
+        verify=verify_ssl,
     )
     try:
         response.raise_for_status()

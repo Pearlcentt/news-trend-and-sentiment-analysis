@@ -18,18 +18,19 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import feedparser
 import requests
 import yaml
-from bs4 import BeautifulSoup
 from confluent_kafka import KafkaException, Producer
 
 from avro_producer import AvroKafkaProducer
 from schema_registry import SchemaRegistry
+
+# Import shared modules instead of duplicating
+from config import FeedConfig
+from feeds import fetch_feed, fetch_article_body as _fetch_article_body
 
 
 LOG = logging.getLogger("news_crawler")
@@ -46,6 +47,12 @@ def load_yaml(path: Path) -> Dict[str, Any]:
         config["schema_registry"]["url"] = os.getenv("SCHEMA_REGISTRY_URL")
     if os.getenv("CRAWL_INTERVAL"):
         config["crawler"]["poll_interval_seconds"] = int(os.getenv("CRAWL_INTERVAL"))
+    # Security: SSL verification can be disabled for local dev only
+    if os.getenv("VERIFY_SSL"):
+        config["crawler"]["verify_ssl"] = os.getenv("VERIFY_SSL").lower() == "true"
+    # Rate limiting between feed fetches
+    if os.getenv("RATE_LIMIT_DELAY"):
+        config["crawler"]["rate_limit_delay"] = float(os.getenv("RATE_LIMIT_DELAY"))
     
     return config
 
@@ -68,63 +75,22 @@ def save_state(path: Path, state: Dict[str, float]) -> None:
     tmp_path.replace(path)
 
 
-@dataclass
-class FeedConfig:
-    name: str
-    url: str
-    section: Optional[str] = None
-    category: Optional[str] = None
-    language: str = "en"
-    summary_only: bool = False
-
-
-def fetch_rss(feed: FeedConfig) -> Iterable[Dict[str, Any]]:
-    parsed = feedparser.parse(feed.url)
-    for entry in parsed.entries:
-        published = entry.get("published_parsed") or entry.get("updated_parsed")
-        published_ms = (
-            int(time.mktime(published) * 1000) if published else int(time.time() * 1000)
-        )
-        yield {
-            "id": entry.get("id") or entry.get("guid") or str(uuid.uuid4()),
-            "title": entry.get("title", "").strip(),
-            "summary": entry.get("summary", "").strip(),
-            "link": entry.get("link"),
-            "tags": [tag.term for tag in entry.get("tags", [])],
-            "authors": [a.name for a in entry.get("authors", [])]
-            if entry.get("authors")
-            else [],
-            "published_ms": published_ms,
-            "section": feed.section,
-            "category": feed.category or entry.get("category"),
-            "language": feed.language,
-            "summary_only": feed.summary_only,
-        }
-
-
-def fetch_article_body(url: str, timeout: int = 10) -> Dict[str, Any]:
-    response = requests.get(url, timeout=timeout, headers={"User-Agent": "NewsBot/1.0"})
-    try:
-        response.raise_for_status()
-    except requests.HTTPError:
-        # Return minimal metadata so callers can decide to skip/persist error events.
-        return {
-            "body": "",
-            "http_status": response.status_code,
-            "content_type": response.headers.get("Content-Type", "text/html"),
-            "content_length": int(response.headers.get("Content-Length", len(response.content))),
-            "error": True,
-        }
-    soup = BeautifulSoup(response.text, "html.parser")
-    paragraphs = " ".join(p.get_text(strip=True) for p in soup.find_all("p"))
-    normalized_text = paragraphs.strip()
-    return {
-        "body": normalized_text,
-        "http_status": response.status_code,
-        "content_type": response.headers.get("Content-Type", "text/html"),
-        "content_length": int(response.headers.get("Content-Length", len(response.content))),
-        "error": False,
-    }
+# fetch_rss is now replaced by fetch_feed from feeds.py
+# Using a wrapper for backward compatibility
+def fetch_rss(feed: FeedConfig):
+    """Wrapper around fetch_feed for backward compatibility."""
+    for article in fetch_feed(feed):
+        yield article
+# fetch_article_body is now imported from feeds.py as _fetch_article_body
+# Using a wrapper to maintain the same interface with SSL and rate limit support
+def fetch_article_body(
+    url: str, 
+    timeout: int = 10,
+    verify_ssl: bool = True,
+    rate_limit_delay: float = 0.5
+) -> Dict[str, Any]:
+    """Wrapper around feeds.fetch_article_body for backward compatibility."""
+    return _fetch_article_body(url, timeout, verify_ssl, rate_limit_delay)
 
 
 def build_event(
@@ -141,7 +107,15 @@ def build_event(
         }
         crawl_status = "summary_only"
     else:
-        body_result = fetch_article_body(raw_article["link"], crawl_cfg["request_timeout"])
+        # Get security and rate limit settings from config
+        verify_ssl = crawl_cfg.get("verify_ssl", True)
+        rate_limit_delay = crawl_cfg.get("rate_limit_delay", 0.5)
+        body_result = fetch_article_body(
+            raw_article["link"], 
+            crawl_cfg["request_timeout"],
+            verify_ssl=verify_ssl,
+            rate_limit_delay=rate_limit_delay
+        )
         body_text = body_result["body"]
         crawl_status = "ok" if not body_result.get("error") else "http_error"
 
