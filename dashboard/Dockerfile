@@ -5,6 +5,10 @@ WORKDIR /app
 # Install curl for healthcheck and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
+# Set locale
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

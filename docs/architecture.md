@@ -115,30 +115,27 @@ sequenceDiagram
 
 **Key Features:**
 
-- Watermarking for late data handling (30 min threshold)
-- Window aggregations (10 min windows, 5 min slide)
-- Pivot operations for sentiment breakdown
-- Broadcast join for source metadata enrichment
-
-**Output Collections:**
-
-- `rt_trends` - Topic trends per window
-- `rt_sentiment_by_source` - Source sentiment over time
-- `rt_topic_sentiment_pivot` - Pivot table (pos/neu/neg counts)
+- **Auto-Categorization**: Lightweight UDF for keyword-based topic assignment.
+- **Latency**: ~60 seconds end-to-end.
+- **Lifecycle**: Automated cleanup of data > 3 days old via Airflow.
+- **Output**: `news_rt` database (Trends, Source Sentiment).
 
 ### Batch Layer (Historical)
 
-| Component    | Technology     | Purpose               |
-| ------------ | -------------- | --------------------- |
-| Batch Job    | Spark Batch    | Historical processing |
-| Cold Storage | HDFS + Parquet | Long-term storage     |
+| Component     | Technology         | Purpose                    |
+| ------------- | ------------------ | -------------------------- |
+| Scheduler     | Apache Airflow 2.7 | Daily Orchestration (6 PM) |
+| Batch Job     | Spark Batch        | Historical processing      |
+| Cold Storage  | HDFS + Parquet     | Long-term Archive          |
+| Serving Store | MongoDB            | Dashboard Integration      |
 
 **Key Features:**
 
-- Complex aggregations (cube, rollup, pivot)
-- Window functions (rank, dense_rank, lag/lead)
-- Bucketing by source_domain for optimized joins
-- Partitioning by date (dt) and language
+- **Dual-Write Strategy**:
+  1.  **Parquet (HDFS)**: Optimized for heavy queries/retraining.
+  2.  **MongoDB**: Optimized for Dashboard display (Collections: `historical_articles`).
+- **Schedule**: Runs daily at **18:00 (6 PM)**.
+- **Logic**: Deduplicates against existing data using content hash.
 
 **Advanced Analytics:**
 

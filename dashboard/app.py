@@ -12,6 +12,29 @@ import os
 import re  # For HTML stripping
 
 
+def filter_dataframe_by_time(df, time_range):
+    """Filter dataframe based on selected time range"""
+    if not isinstance(df, pd.DataFrame) or df.empty or 'published_at' not in df.columns:
+        return df
+    
+    # Create temp column for filtering if needed
+    if 'dt' not in df.columns:
+        df['dt'] = pd.to_datetime(df['published_at'], format='mixed', errors='coerce', utc=True)
+        df['dt'] = df['dt'].dt.tz_localize(None)
+    
+    now = datetime.now()
+    if time_range == 'Last 24 hours':
+        cutoff = now - timedelta(hours=24)
+    elif time_range == 'Last 7 days':
+        cutoff = now - timedelta(days=7)
+    elif time_range == 'Last 30 days':
+        cutoff = now - timedelta(days=30)
+    else:
+        return df
+        
+    return df[df['dt'] >= cutoff]
+
+
 def strip_html_tags(html_text):
     """Convert HTML content to clean, readable plain text."""
     if not html_text:
@@ -163,109 +186,144 @@ def generate_sample_data():
 
 
 def load_data():
-    """Load data from MongoDB - combines historical and real-time data"""
+    """Load data from MongoDB with optimized aggregation"""
     try:
         from pymongo import MongoClient
         config = get_mongodb_config()
         
-        # Force fresh connection with no caching
         client = MongoClient(
             config['host'], 
             config['port'], 
-            serverSelectionTimeoutMS=10000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000,
-            maxPoolSize=1,
-            retryWrites=False
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
         )
         
         # Debug: Show connection info in sidebar
-        try:
-            server_info = client.server_info()
-            databases = client.list_database_names()
-            st.sidebar.success(f"✅ MongoDB {server_info.get('version', 'connected')}")
-            st.sidebar.info(f"DBs: {', '.join(databases)}")
-        except Exception as conn_err:
-            st.sidebar.error(f"Connection: {str(conn_err)[:50]}")
+        with st.sidebar.expander("Database Status", expanded=True):
+            try:
+                server_info = client.server_info()
+                st.success(f"✅ MongoDB Connected")
+            except Exception as conn_err:
+                st.error(f"Connection: {str(conn_err)[:50]}")
+                return generate_sample_data()
         
-        all_data = []
-        
-        # Load historical articles (primary data source)
         db_analytics = client['news_analytics']
-        hist_collection = db_analytics['historical_articles']
-        hist_count = hist_collection.count_documents({})
-        st.sidebar.info(f"📊 historical_articles: {hist_count}")
-        
-        if hist_count > 0:
-            hist_cursor = hist_collection.find().sort('event_time', -1).limit(5000)
-            hist_data = list(hist_cursor)
-        else:
-            hist_data = []
-        
-        # Transform historical data to dashboard format
-        for doc in hist_data:
-            all_data.append({
-                'id': doc.get('article_id', ''),
-                'title': doc.get('title', ''),
-                'url': doc.get('url', ''),
-                'source': doc.get('source_domain', 'Unknown').replace('.com', '').replace('.', ' ').title(),
-                'category': doc.get('category', 'General'),
-                'sentiment': doc.get('sentiment', 'neutral'),
-                'sentiment_score': 0.5 if doc.get('sentiment') == 'positive' else (-0.5 if doc.get('sentiment') == 'negative' else 0),
-                'published_at': datetime.fromtimestamp(doc.get('event_time', 0) / 1000).isoformat() if doc.get('event_time') else datetime.now().isoformat(),
-                'word_count': len(doc.get('body_text', '').split()) if doc.get('body_text') else 100,
-                'body_text': doc.get('body_text', ''),
-            })
-        
-        # Also load real-time data if available (Last 3 days only)
         db_rt = client['news_rt']
-        rt_collection = db_rt['processed_news']
-        three_days_ago = (datetime.now() - timedelta(days=3)).timestamp() * 1000
         
-        # Query for recent items
-        rt_cursor = rt_collection.find({
-            'process_time': {'$gte': datetime.now() - timedelta(days=3)} # Attempt datetime first
-        }).sort('process_time', -1).limit(500)
+        # Get total counts for display (fast count query)
+        total_historical = db_analytics['historical_articles'].estimated_document_count()
+        total_rt = db_rt['processed_news'].estimated_document_count()
         
-        # Fallback if stored as timestamp
-        if rt_collection.count_documents({'process_time': {'$gte': datetime.now() - timedelta(days=3)}}) == 0:
-             rt_cursor = rt_collection.find({
-                'process_time': {'$gte': three_days_ago}
-            }).sort('process_time', -1).limit(500)
-
+        # Show debug info in sidebar
+        with st.sidebar.expander("Data Loading", expanded=False):
+            st.write(f"Historical (DB): {total_historical}")
+            st.write(f"RT (DB): {total_rt}")
+        
+        # Load articles for visualization
+        pipeline = [
+            # Sort by newest
+            {'$sort': {'event_time': -1}},
+            # Load all data
+            {'$limit': 15000},
+            # Project only needed fields - use $ifNull to handle missing body_text
+            {'$project': {
+                'article_id': 1, 'title': 1, 'url': 1, 'source_domain': 1,
+                'category': 1, 'sentiment': 1, 'event_time': 1, 'published_at': 1,
+                'body_text': {'$ifNull': ['$body_text', '']}
+            }}
+        ]
+        
+        hist_cursor = db_analytics['historical_articles'].aggregate(pipeline)
+        hist_data = list(hist_cursor)
+        
+        # 2. Get Real-time Data (Latest 72 hours)
+        # Query processed_news for latest - use processed_at (the field streaming writes)
+        # Use string comparison for processed_at (YYYY-MM-DD HH:MM:SS)
+        cutoff_date = (datetime.now() - timedelta(hours=72)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        rt_pipeline = [
+             {'$match': {'processed_at': {'$gte': cutoff_date}}},
+             {'$sort': {'processed_at': -1}},
+             {'$limit': 1000},
+             {'$project': {
+                'article_id': 1, 'title': 1, 'url': 1, 'source_domain': 1,
+                'category': 1, 'sentiment': 1, 'event_time': 1, 'published_at': 1,
+                'processed_at': 1,
+                'body_text': 1,
+                'keywords': 1
+            }}
+        ]
+        rt_cursor = db_rt['processed_news'].aggregate(rt_pipeline)
         rt_data = list(rt_cursor)
-        
-        for doc in rt_data:
-            # Use published_at if available, fallback to event_time or process_time
-            pub_time = doc.get('published_at') or doc.get('event_time') or doc.get('process_time')
-            if isinstance(pub_time, (int, float)):
-                pub_time_str = datetime.fromtimestamp(pub_time / 1000).isoformat()
-            elif isinstance(pub_time, datetime):
-                pub_time_str = pub_time.isoformat()
-            else:
-                pub_time_str = datetime.now().isoformat()
-            
-            all_data.append({
-                'id': doc.get('article_id', ''),
-                'title': doc.get('title', ''),
-                'url': doc.get('url', ''),
-                'source': doc.get('source_domain', 'Unknown').replace('.com', '').replace('.', ' ').title(),
-                'category': doc.get('category', 'General'),
-                'sentiment': doc.get('sentiment', 'neutral'),
-                'sentiment_score': 0.5 if doc.get('sentiment') == 'positive' else (-0.5 if doc.get('sentiment') == 'negative' else 0),
-                'published_at': pub_time_str,
-                'word_count': 100,
-                'body_text': doc.get('content', '') or doc.get('body_text', ''),
-            })
         
         client.close()
         
+        all_data = []
+        
+        # Process History
+        for doc in hist_data:
+            pub_time = doc.get('event_time') or doc.get('published_at')
+            if isinstance(pub_time, (int, float)):
+                pub_time = datetime.fromtimestamp(pub_time / 1000)
+            
+            all_data.append({
+                'id': str(doc.get('article_id', '')),
+                'title': doc.get('title', ''),
+                'url': doc.get('url', ''),
+                'source': doc.get('source_domain', 'Unknown').replace('.com', '').replace('.', ' ').title(),
+                'category': doc.get('category', 'General'),
+                'sentiment': doc.get('sentiment', 'neutral'),
+                'sentiment_score': 0.5 if doc.get('sentiment') == 'positive' else (-0.5 if doc.get('sentiment') == 'negative' else 0),
+                'published_at': pub_time.isoformat() if pub_time else datetime.now().isoformat(),
+                'word_count': 100, # Estimated
+                'body_text': doc.get('body_text', ''),
+                'type': 'Historical'
+            })
+            
+        # Process RT - handle sentiment as dict from streaming
+        for doc in rt_data:
+            # Use event_time (original published date) instead of processed_at
+            pub_time = doc.get('event_time') or doc.get('published_at') or datetime.now()
+            if isinstance(pub_time, str):
+                try:
+                    pub_time = datetime.fromisoformat(pub_time.replace(' ', 'T').replace('Z', '+00:00'))
+                except:
+                    pub_time = datetime.now()
+            
+            # Handle sentiment as dict (from streaming) or string
+            sentiment_raw = doc.get('sentiment', {})
+            if isinstance(sentiment_raw, dict):
+                sentiment_label = sentiment_raw.get('label', 'neutral')
+                sentiment_polarity = sentiment_raw.get('polarity', 0)
+            else:
+                sentiment_label = sentiment_raw or 'neutral'
+                sentiment_polarity = 0.5 if sentiment_label == 'positive' else (-0.5 if sentiment_label == 'negative' else 0)
+            
+            # Map short labels to full names
+            sentiment_map = {'pos': 'positive', 'neg': 'negative', 'neu': 'neutral'}
+            sentiment_label = sentiment_map.get(sentiment_label, sentiment_label)
+            
+            all_data.append({
+                'id': str(doc.get('article_id', '')),
+                'title': doc.get('title', ''),
+                'url': doc.get('url', ''),
+                'source': doc.get('source_domain', 'Unknown').replace('.com', '').replace('.', ' ').title(),
+                'category': doc.get('category', 'General'),
+                'sentiment': sentiment_label,
+                'sentiment_score': sentiment_polarity,
+                'published_at': pub_time.isoformat() if hasattr(pub_time, 'isoformat') else str(pub_time),
+                'word_count': 100,
+                'body_text': doc.get('body_text', '')[:200] if doc.get('body_text') else '',
+                'type': 'Real-time'
+            })
+            
         if all_data:
             return pd.DataFrame(all_data)
         else:
             return generate_sample_data()
+
     except Exception as e:
-        st.sidebar.warning(f"Using sample data (MongoDB: {str(e)[:50]})")
+        st.sidebar.warning(f"Using sample data (MongoDB Error: {str(e)[:100]})")
         return generate_sample_data()
 
 
@@ -425,8 +483,9 @@ def render_source_chart(df):
         plot_bgcolor='rgba(255,255,255,0.95)',
         font=dict(color='#1e293b'),
         xaxis=dict(gridcolor='rgba(0,0,0,0.1)', tickangle=45),
-        yaxis=dict(gridcolor='rgba(0,0,0,0.1)'),
-        height=400
+        yaxis=dict(gridcolor='rgba(0,0,0,0.1)', range=[0, None]),
+        height=480,
+        margin=dict(t=100, b=100, l=50, r=50),
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -469,8 +528,9 @@ def render_category_distribution(df):
         paper_bgcolor='rgba(255,255,255,0.95)',
         font=dict(color='#1e293b'),
         showlegend=True,
-        legend=dict(font=dict(color='#475569'), orientation='h', yanchor='bottom', y=-0.2),
-        height=400
+        legend=dict(font=dict(color='#475569'), orientation='h', yanchor='bottom', y=-0.3),
+        height=480,
+        margin=dict(t=50, b=100, l=50, r=50),
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -788,6 +848,16 @@ def render_news_feed(df):
     else:
         df_sorted = df
     
+    # Filter for Historical (Batch) data only as per requirement, unless toggled
+    show_rt = st.checkbox("Include Real-Time Stream (Unverified)", value=False, help="Show raw streaming data alongside verified batch data")
+    
+    if not show_rt and 'type' in df.columns:
+        df_sorted = df_sorted[df_sorted['type'] == 'Historical']
+    
+    if df_sorted.empty:
+        st.info("No verified batch articles available yet (wait for daily batch job)")
+        return
+
     total_articles = len(df_sorted)
     total_pages = max(1, (total_articles + articles_per_page - 1) // articles_per_page)
     
@@ -923,9 +993,9 @@ def load_realtime_trends():
 
 
 def render_realtime_trends(df):
-    """Render real-time trends section (Last 3 Days)"""
+    """Render real-time trends section (Last 3 Days Only)"""
     st.subheader("📡 Real-Time Trends (Speed Layer)")
-    st.caption("Showing data from the last 3 days")
+    st.caption("Showing data from the last 3 days (Independent of global time filter)")
     
     if 'published_at' not in df.columns:
         st.info("No timeline data available for trends.")
@@ -934,7 +1004,11 @@ def render_realtime_trends(df):
     # Filter for last 3 days
     df_recent = df.copy()
     try:
-        df_recent['dt'] = pd.to_datetime(df_recent['published_at'], format='mixed', errors='coerce')
+        # Parse dates with timezone awareness
+        if 'dt' not in df_recent.columns:
+            df_recent['dt'] = pd.to_datetime(df_recent['published_at'], format='mixed', errors='coerce', utc=True)
+            df_recent['dt'] = df_recent['dt'].dt.tz_localize(None)  # Remove timezone
+            
         cutoff = datetime.now() - timedelta(days=3)
         df_recent = df_recent[df_recent['dt'] >= cutoff]
     except Exception as e:
@@ -971,6 +1045,7 @@ def render_realtime_trends(df):
             
     with col2:
         # Source Sentiment (Last 3 Days)
+        st.markdown('<div style="margin-top: 50px;"></div>', unsafe_allow_html=True)
         st.markdown("**📊 Source Sentiment (Last 3 Days)**")
         if 'source' in df_recent.columns and 'sentiment_score' in df_recent.columns:
             # Group by source
@@ -999,8 +1074,9 @@ def render_realtime_trends(df):
                 plot_bgcolor='rgba(255,255,255,0.95)',
                 font=dict(color='#1e293b'),
                 xaxis=dict(tickangle=45),
-                margin=dict(t=10, l=0, r=0, b=0),
-                height=350
+                yaxis=dict(range=[0, None]),
+                height=400,
+                margin=dict(t=80, b=100, l=50, r=50),
             )
             st.plotly_chart(fig, use_container_width=True)
     
@@ -1067,14 +1143,17 @@ def main():
     # Load data
     df = load_data()
     
-    # Apply filters
+    # Apply metadata filters (Category, Sentiment) first
     if categories and 'category' in df.columns:
         df = df[df['category'].isin(categories)]
     if sentiments and 'sentiment' in df.columns:
         df = df[df['sentiment'].isin(sentiments)]
     
+    # Apply Global Time Filter for main dashboard views
+    df_main_view = filter_dataframe_by_time(df, time_range)
+    
     # Render metrics
-    render_metrics(df)
+    render_metrics(df_main_view)
     
     st.markdown("---")
     
@@ -1083,7 +1162,8 @@ def main():
     
     st.markdown("---")
     
-    # Real-time streaming trends (Speed Layer)
+    # Real-time streaming trends (Speed Layer) 
+    # NOTE: Always uses last 3 days (ignore global time filter) to show Speed Layer status
     render_realtime_trends(df)
     
     st.markdown("---")
@@ -1092,16 +1172,17 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        render_sentiment_distribution(df)
+        render_sentiment_distribution(df_main_view)
     
     with col2:
-        render_source_chart(df)
+        st.markdown('<div style="margin-top: 50px;"></div>', unsafe_allow_html=True)
+        render_source_chart(df_main_view)
     
     # Timeline
-    render_timeline(df)
+    render_timeline(df_main_view)
     
     # Category Distribution (full width)
-    render_category_distribution(df)
+    render_category_distribution(df_main_view)
     
     st.markdown("---")
     
@@ -1110,24 +1191,25 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        render_keywords_chart(df)
+        render_keywords_chart(df_main_view)
     
     with col2:
-        render_locations_chart(df)
+        st.markdown('<div style="margin-top: 50px;"></div>', unsafe_allow_html=True)
+        render_locations_chart(df_main_view)
     
     # Word Cloud and Sentiment Trend
     col1, col2 = st.columns(2)
     
     with col1:
-        render_wordcloud(df)
+        render_wordcloud(df_main_view)
     
     with col2:
-        render_sentiment_trend(df)
+        render_sentiment_trend(df_main_view)
     
     st.markdown("---")
     
     # News feed
-    render_news_feed(df)
+    render_news_feed(df_main_view)
     
     st.markdown("---")
     
@@ -1138,8 +1220,8 @@ def main():
     
     with tabs[0]:
         # Sentiment Heatmap by Source and Day
-        if not df.empty and 'published_at' in df.columns:
-            df_heat = df.copy()
+        if not df_main_view.empty and 'published_at' in df_main_view.columns:
+            df_heat = df_main_view.copy()
             df_heat['published_at_parsed'] = pd.to_datetime(df_heat['published_at'], format='mixed', errors='coerce')
             df_heat = df_heat.dropna(subset=['published_at_parsed'])
             df_heat['date'] = df_heat['published_at_parsed'].dt.date

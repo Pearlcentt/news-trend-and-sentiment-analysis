@@ -1,185 +1,153 @@
 # 🚀 Fresh Runner Guide
 
-**Get real news data flowing in minutes.**
-
-This guide helps you run the **authentic** News Trend & Sentiment Analysis pipeline with real English news from major outlets.
+**Get the News Trend & Sentiment Analysis Pipeline running in 5 minutes.**
 
 ---
 
-## 📐 Architecture Overview
+## 🏗️ Architecture Summary
 
-This system uses **Lambda Architecture** with two parallel data flows:
+This system implements a **Lambda Architecture** on Kubernetes:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     DATA INGESTION                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  [06-crawler.yaml]           [14-fresh/historical-job.yaml]    │
-│  Streaming Layer             Batch Layer                       │
-│  ├─ Runs 24/7               ├─ One-shot jobs                   │
-│  ├─ Pushes to Kafka         ├─ Writes directly to MongoDB      │
-│  └─ Real-time updates       └─ Historical backfill             │
-│                                                                 │
-│  Airflow schedules batch jobs daily at 6 AM                    │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-| Component             | File                                  | Purpose                         |
-| --------------------- | ------------------------------------- | ------------------------------- |
-| **Streaming Crawler** | `k8s/06-crawler.yaml`                 | Continuous RSS crawling → Kafka |
-| **Fresh RSS Job**     | `k8s/14-fresh-crawler-job.yaml`       | One-shot recent news (7 days)   |
-| **Historical Job**    | `k8s/14-historical-backfill-job.yaml` | GDELT backfill (full year)      |
-| **Airflow DAG**       | `airflow/dags/news_crawler_dag.py`    | Schedules daily batch jobs      |
+1.  **Speed Layer (Real-Time)**: Kafka -> Spark Streaming -> MongoDB (Hot) -> Dashboard.
+2.  **Batch Layer (Historical)**: Airflow (Daily @ 6 PM) -> Spark Batch -> HDFS (Cold) + MongoDB (Serving) -> Dashboard.
+3.  **Serving Layer**: Streamlit Dashboard + Trino.
 
 ---
 
 ## ⚡ Quick Start
 
-### 1. Start Minikube
+### 1. Prerequisites
+
+- **Minikube** (installed and running)
+- **Kubectl**
+- **PowerShell** (Recommended for Windows)
+
+### 2. One-Click Deployment
+
+We have consolidated all deployment logic into a robust PowerShell script.
 
 ```powershell
-minikube start --memory=6144 --cpus=4
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f k8s/11-persistent-volumes.yaml
-```
-
-### 2. Deploy Pipeline
-
-```powershell
+# Run the deployment script
 ./deploy.ps1
 ```
 
-_Wait 2-3 minutes for pods to reach `Running` state._
+**What this script does:**
 
-### 3. Ingest Data
+1.  Checks prerequisites.
+2.  starts Minikube (if stopped).
+3.  Deploys Core Infra (Kafka, MongoDB, Spark, HDFS).
+4.  Generates **ConfigMaps** (syncs Python code to K8s).
+5.  Deploys Apps (Crawler, Dashboard, Airflow, Streaming Job).
 
-**Option A: Fresh News (Quick Start)**
+_Wait ~3-5 minutes for all pods to show `Running`._
 
-```powershell
-kubectl apply -f k8s/14-fresh-crawler-job.yaml
-```
+---
 
-**Option B: Historical Backfill (Full Year)**
+## 🖥️ Accessing Interfaces
 
-```powershell
-kubectl apply -f k8s/14-historical-backfill-job.yaml
-```
+Once deployed, access the services via Port-Forwarding:
 
-> **Data Sources**: BBC, CNN, Guardian, Reuters, NPR, Fox News, NYT, WaPo, AP News  
-> **Filter**: English-only (50 articles/day)
-
-### 4. Process Data
-
-```powershell
-kubectl apply -f k8s/15-process-historical-job.yaml   # Sentiment
-kubectl apply -f k8s/16-classify-articles-job.yaml    # Categories
-kubectl apply -f k8s/18-data-quality-job.yaml         # Data Quality Validation
-```
-
-### 5. Access Dashboard
+### 📊 Main Dashboard
 
 ```powershell
 kubectl port-forward -n news-pipeline svc/streamlit-dashboard 8501:8501
 ```
 
-> Open: [http://localhost:8501](http://localhost:8501)
+> **URL**: [http://localhost:8501](http://localhost:8501)
 
----
-
-## 🔄 Scheduled Crawling (Airflow)
-
-For automated daily crawling, use Airflow:
+### 🌪️ Airflow (Batch Orchestration)
 
 ```powershell
-cd airflow
-docker-compose up -d
+kubectl port-forward -n news-pipeline svc/airflow-webserver 8080:8080
 ```
 
-Access Airflow UI: [http://localhost:8080](http://localhost:8080) (admin/admin)
+> **URL**: [http://localhost:8080](http://localhost:8080)  
+> **Creds**: `admin` / `admin`
 
-The `news_crawler_daily` DAG runs at 6 AM and:
-
-1. Crawls fresh RSS news
-2. Processes sentiment
-3. Classifies categories
-
----
-
-## ✨ Dashboard Features
-
-| Feature                 | Description                                                              |
-| ----------------------- | ------------------------------------------------------------------------ |
-| **Full Article Reader** | Complete content, HTML stripped, no truncation                           |
-| **Published Dates**     | Uses original article date (not crawl time)                              |
-| **English Only**        | All data filtered to English sources                                     |
-| **Real-Time Trends**    | Speed Layer shows last 3 days                                            |
-| **8 Categories**        | Politics, Tech, Business, Entertainment, Sports, Science, World, General |
-
----
-
-## 💾 Data Management
-
-### Backup
+### 🔎 Spark UI (Monitoring)
 
 ```powershell
-./scripts/backup_data.ps1
+kubectl port-forward -n news-pipeline svc/spark-master 8090:8080
 ```
 
-### Restore
-
-```powershell
-kubectl cp backup.json news-pipeline/<mongodb-pod>:/tmp/data.json
-kubectl exec -n news-pipeline deployment/mongodb -- mongoimport \
-  --db news_analytics --collection historical_articles \
-  --file /tmp/data.json --jsonArray --upsert
-```
+> **URL**: [http://localhost:8090](http://localhost:8090)
 
 ---
 
-## 🧪 Testing
+## 🎮 Operations Guide
+
+### 1. Trigger Batch Processing (Historical Data)
+
+The batch job runs automatically at **6:00 PM** daily. To trigger it manually (e.g., for a demo):
 
 ```powershell
-# Run all tests
-pytest tests/ -v
+# Unpause and Trigger DAG
+kubectl exec -n news-pipeline deployment/airflow -- airflow dags unpause news_crawler_daily
+kubectl exec -n news-pipeline deployment/airflow -- airflow dags trigger news_crawler_daily
+```
 
-# Unit tests only
-pytest tests/unit/ -v
+**What happens:**
 
-# Integration tests
-pytest tests/integration/ -v
+- Crawls fresh news (past 7 days).
+- Runs Sentiment Analysis & ML Classification.
+- Backfills `news_analytics.historical_articles`.
+- Updates the "Articles" tab in the Dashboard.
+
+### 2. Real-Time Data
+
+- **Status**: Running automatically (`spark-streaming-job`).
+- **Verify**: Check "Real-Time Trends" in the Dashboard.
+- **Cleanup**: Data older than 3 days is auto-deleted by Airflow to save space.
+
+### 3. Update Code (Hot Reload)
+
+If you edit `app.py`, `streaming_pipeline.py`, or `batch_pipeline.py`, apply changes without rebuilding Docker images:
+
+```powershell
+# Re-run deployment script to update ConfigMaps
+./deploy.ps1
+# OR manually:
+./k8s/create-configmaps.sh
+```
+
+Then restart the relevant pods:
+
+```powershell
+kubectl delete pod -n news-pipeline -l app=streamlit-dashboard
+# OR
+kubectl delete pod -n news-pipeline -l app=spark-streaming-job
 ```
 
 ---
 
 ## 🛠️ Troubleshooting
 
-| Problem                | Solution                      |
-| ---------------------- | ----------------------------- |
-| Dashboard empty        | Run crawler + processing jobs |
-| GDELT SSL error        | Fixed in code (verify=False)  |
-| Non-English articles   | Language filter active        |
-| Old dates (April 2023) | 7-day date filter active      |
+| Issue                       | Solution                                                                 |
+| --------------------------- | ------------------------------------------------------------------------ |
+| **Dashboard shows "???"**   | Browser/Docker encoding issue. Fixed in latest build (UTF-8).            |
+| **Airflow "Dag Not Found"** | `kubectl exec -n news-pipeline deployment/airflow -- airflow db migrate` |
+| **Pods Pending**            | Check resources: `minikube start --memory=8192 --cpus=4`                 |
+| **No Real-Time Data**       | Restart streaming: `kubectl delete pod -l app=spark-streaming-job`       |
 
 ---
 
-## 📋 Quick Reference
+## 🧹 Factory Reset (Teardown)
+
+To completely wipe the environment and start fresh (simulate a new machine):
 
 ```powershell
-# Check pods
-kubectl get pods -n news-pipeline
+# 1. Delete Minikube Cluster (Removes all data/volumes)
+minikube delete --all --purge
 
-# View crawler logs
-kubectl logs -f job/historical-backfill-jan2025 -n news-pipeline
+# 2. (Optional) Prune Docker Resources
+# WARNING: This deletes ALL Docker images/containers, not just for this project
+docker system prune -a --volumes -f
 
-# Restart dashboard
-kubectl delete pod -n news-pipeline -l app=streamlit-dashboard
-
-# Stop backfill job
-kubectl delete job historical-backfill-jan2025 -n news-pipeline
+# 3. Clear local temporary config
+Remove-Item -Path $env:USERPROFILE\.kube -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $env:USERPROFILE\.minikube -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
 ---
 
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-01-10
