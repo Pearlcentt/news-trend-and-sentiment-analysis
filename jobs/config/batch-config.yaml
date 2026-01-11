@@ -8,4 +8,4 @@ inputs:
     bootstrap_servers: "kafka-broker:9092"
     topic: "news_raw"
 outputs:
-  parquet_path: "hdfs:///data/news/articles_enriched_parquet"
+  parquet_path: "s3a://news-batch/articles_enriched_parquet"

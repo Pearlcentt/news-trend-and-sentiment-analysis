@@ -227,8 +227,8 @@ def main():
         print("  Trying HDFS...")
         
         try:
-            # Load from HDFS Parquet (batch layer output)
-            hdfs_path = os.getenv('HDFS_TRAINING_PATH', 'hdfs://hdfs-namenode:9000/news/labeled')
+            # Load from S3 (batch layer output)
+            hdfs_path = os.getenv('HDFS_TRAINING_PATH', 's3a://news-batch/labeled')
             train_df = (
                 spark.read
                 .parquet(hdfs_path)

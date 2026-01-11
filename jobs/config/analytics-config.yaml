@@ -1,20 +1,20 @@
 inputs:
-  parquet_path: "hdfs:///data/news/articles_enriched_parquet"
+  parquet_path: "s3a://news-batch/articles_enriched_parquet"
   start_dt: "2025-10-20"
   end_dt: "2025-10-27"
-  source_metadata: "../../jobs/reference/source_metadata.json"
+  source_metadata: "/opt/jobs/source_metadata.json"
 outputs:
-  topic_rolling_stats_path: "hdfs:///data/analytics/topic_rolling_stats"
-  sentiment_pivot_path: "hdfs:///data/analytics/sentiment_pivot"
-  sentiment_unpivot_path: "hdfs:///data/analytics/sentiment_unpivot"
-  pagerank_path: "hdfs:///data/analytics/graph_pagerank"
-  ml_metrics_path: "hdfs:///data/analytics/ml_metrics"
-  time_series_path: "hdfs:///data/analytics/time_series"
-  warehouse_path: "hdfs:///warehouse/news_analytics"
+  topic_rolling_stats_path: "s3a://news-batch/analytics/topic_rolling_stats"
+  sentiment_pivot_path: "s3a://news-batch/analytics/sentiment_pivot"
+  sentiment_unpivot_path: "s3a://news-batch/analytics/sentiment_unpivot"
+  pagerank_path: "s3a://news-batch/analytics/graph_pagerank"
+  ml_metrics_path: "s3a://news-batch/analytics/ml_metrics"
+  time_series_path: "s3a://news-batch/analytics/time_series"
+  warehouse_path: "s3a://news-batch/warehouse/news_analytics"
 spark:
   shuffle_partitions: 400
   log_level: "INFO"
 graphframes:
-  checkpoint: "hdfs:///checkpoints/graphframes"
+  checkpoint: "s3a://checkpoints/graphframes"
 ml:
   max_iter: 60

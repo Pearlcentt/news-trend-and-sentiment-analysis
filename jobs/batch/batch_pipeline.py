@@ -68,7 +68,7 @@ def get_env_config(mode: str) -> Dict[str, Any]:
                 "news_raw": os.getenv("SCHEMA_PATH", "/app/schemas/news_raw.avsc"),
             },
             "outputs": {
-                "parquet_path": os.getenv("OUTPUT_PATH", "hdfs:///data/news/batch"),
+                "parquet_path": os.getenv("OUTPUT_PATH", "s3a://news-batch/articles_enriched_parquet"),
             },
         }
     else:  # local - use config file
@@ -115,7 +115,7 @@ def heavy_keyword_enrichment(text: str) -> Dict[str, Any]:
     """Placeholder for heavy NLP (topic modeling, embeddings, etc.)."""
     normalized = (text or "").encode("utf-8")
     vector_hash = hashlib.md5(normalized).hexdigest()
-    path = f"hdfs:///data/news/vec/{vector_hash[:2]}/{vector_hash}.vec"
+    path = f"s3a://news-batch/vec/{vector_hash[:2]}/{vector_hash}.vec"
     return {"embedding_vector_path": path, "model_version": "nlp-en-v3.2"}
 
 
@@ -178,10 +178,17 @@ def main():
         .withColumn("model_version", model_version_udf(F.col("body_text")))
         .withColumn("preprocess_version", F.lit("clean-1.5"))
         .withColumn("language", F.col("language"))
+        # Add missing columns expected by output schema
+        .withColumn("sentiment", F.lit(None).cast("string"))
+        .withColumn("entities", F.array().cast("array<string>"))
+        .withColumn("keywords", F.array().cast("array<string>"))
+        .withColumn("topics", F.array().cast("array<string>"))
     )
 
     output_cols = [
         "dt",
+        "title",
+        "body_text",
         "article_id",
         "source_domain",
         "published_at",
@@ -214,14 +221,19 @@ def main():
 
     if mongo_output_uri:
         print(f"Writing matching batch data to MongoDB...")
+        database = spark.conf.get("spark.mongodb.output.database", "news_analytics")
+        collection = spark.conf.get("spark.mongodb.output.collection", "historical_articles")
+        
         (
             enriched.select(*output_cols)
             .write.mode("append")
             .format("mongodb")
-            .option("uri", mongo_output_uri)
+            .option("connection.uri", mongo_output_uri)
+            .option("database", database)
+            .option("collection", collection)
             .save()
         )
-        print(f"✅ Wrote batch data to MongoDB: {mongo_output_uri}")
+        print(f"✅ Wrote batch data to MongoDB: {mongo_output_uri} ({database}.{collection})")
     else:
         print("⚠️ No MongoDB output URI configured. Skipping Mongo write.")
 

@@ -45,16 +45,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-@F.pandas_udf("double", F.PandasUDFType.GROUPED_AGG)
-def burstiness(series: pd.Series) -> float:
-    """Custom aggregation to capture volatility (CV = std/mean)."""
-    if series.empty:
-        return 0.0
-    mean = series.mean()
-    std = series.std()
-    if mean == 0:
-        return float(std > 0)
-    return float(std / abs(mean))
+# def burstiness(series: pd.Series) -> float:
+#     """Moved inside main() to avoid SparkContext error during import."""
+#     pass
 
 
 def main():
@@ -73,6 +66,17 @@ def main():
     spark.sparkContext.setLogLevel(config["spark"].get("log_level", "INFO"))
     spark.sql("CREATE NAMESPACE IF NOT EXISTS analytics")
 
+    @F.pandas_udf("double", F.PandasUDFType.GROUPED_AGG)
+    def burstiness(series: pd.Series) -> float:
+        """Custom aggregation to capture volatility (CV = std/mean)."""
+        if series.empty:
+            return 0.0
+        mean = series.mean()
+        std = series.std()
+        if mean == 0:
+            return float(std > 0)
+        return float(std / abs(mean))
+
     inputs = config["inputs"]
     outputs = config["outputs"]
 
@@ -89,19 +93,28 @@ def main():
 
     # 2. Topic Analysis with Custom UDF & Shared Time Series Logic
     # ---------------------------------------------------------
+    # Parse sentiment if it's a string (JSON)
+    # Batch pipeline initializes it as string, so we must parse it.
+    sentiment_schema = "label STRING, polarity DOUBLE"
+    
+    articles_enriched = articles.withColumn(
+        "sentiment_struct", 
+        F.from_json(F.col("sentiment"), sentiment_schema)
+    )
+
     topic_exploded = (
-        articles.select(
+        articles_enriched.select(
             "article_id",
             "source_domain",
             "language",
             "dt",
-            F.col("sentiment.polarity").alias("sentiment_polarity"),
-            F.col("sentiment.label").alias("sentiment_label"),
-            F.to_timestamp(F.col("published_at") / 1000).alias("published_ts"),
+            F.col("sentiment_struct.polarity").alias("sentiment_polarity"),
+            F.col("sentiment_struct.label").alias("sentiment_label"),
+            F.col("published_at").alias("published_ts"),
             F.explode("topics").alias("topic"),
         )
-        .withColumn("topic_id", F.col("topic.topic_id"))
-        .withColumn("topic_score", F.col("topic.score"))
+        .withColumn("topic_id", F.col("topic"))
+        .withColumn("topic_score", F.lit(1.0))
         .drop("topic")
     )
 
@@ -157,15 +170,16 @@ def main():
         .save(outputs["topic_rolling_stats_path"])
     )
 
-    topic_rolling_stats.write.mode("overwrite").bucketBy(24, "topic_id").sortBy("topic_id").saveAsTable(
-        "analytics.topic_rolling_stats"
-    )
+    # Skipped redundant saveAsTable to avoid LOCATION_ALREADY_EXISTS error
+    # topic_rolling_stats.write.mode("overwrite").bucketBy(24, "topic_id").sortBy("topic_id").saveAsTable(
+    #     "analytics.topic_rolling_stats"
+    # )
 
     # 3. Pivot/Unpivot (Unique Logic)
     # ---------------------------------------------------------
     sentiment_pivot = (
-        articles.groupBy("language")
-        .pivot("sentiment.label", ["pos", "neu", "neg"])
+        articles_enriched.groupBy("language")
+        .pivot("sentiment_struct.label", ["pos", "neu", "neg"])
         .agg(F.count("*").alias("article_count"))
         .na.fill(0)
     )
@@ -184,29 +198,39 @@ def main():
     ml_cfg = config.get("ml", {})
     
     # Prepare data for ML
-    ml_dataset = articles.select(
-        F.coalesce(F.col("body_text"), F.col("title")).alias("clean_text"),
-        F.col("language"),
-        F.col("sentiment.label").alias("sentiment_label"),
-    ).filter(F.col("clean_text").isNotNull() & F.col("sentiment_label").isNotNull())
+    text_col = None
+    if "body_text" in articles_enriched.columns:
+        text_col = F.coalesce(F.col("body_text"), F.col("title"))
+    elif "title" in articles_enriched.columns:
+        text_col = F.col("title")
 
-    train_df, test_df = ml_dataset.randomSplit([0.8, 0.2], seed=42)
+    if text_col is not None:
+        ml_dataset = articles_enriched.select(
+            text_col.alias("clean_text"),
+            F.col("language"),
+            F.col("sentiment_struct.label").alias("sentiment_label"),
+        ).filter(F.col("clean_text").isNotNull() & F.col("sentiment_label").isNotNull())
+
+        train_df, test_df = ml_dataset.randomSplit([0.8, 0.2], seed=42)
     
-    # REUSE: Build pipeline using imported function
-    ml_pipeline = build_classification_pipeline(classifier_type="logistic")
-    
-    # Fit and Transform
-    ml_model = ml_pipeline.fit(train_df)
-    predictions = ml_model.transform(test_df)
-    
-    # REUSE: Evaluate using imported function
-    metrics = evaluate_model(predictions)
-    
-    metrics_df = spark.createDataFrame(
-        [(k, float(v)) for k, v in metrics.items()],
-        ["metric", "value"]
-    )
-    metrics_df.write.mode("overwrite").json(outputs["ml_metrics_path"])
+        # REUSE: Build pipeline using imported function
+        ml_pipeline = build_classification_pipeline(classifier_type="logistic")
+
+        # Fit and Transform
+        ml_model = ml_pipeline.fit(train_df)
+        predictions = ml_model.transform(test_df)
+        
+        # REUSE: Evaluate using imported function
+        metrics = evaluate_model(predictions)
+        
+        metrics_df = spark.createDataFrame(
+            [(k, float(v)) for k, v in metrics.items()],
+            ["metric", "value"]
+        )
+        metrics_df.write.mode("overwrite").json(outputs["ml_metrics_path"])
+    else:
+        print("WARNING: 'body_text' or 'title' columns missing. Skipping ML Pipeline.")
+        ml_pipeline = None
 
     # 5. Integrated Graph Analytics (REUSE graph_analytics.py)
     # ---------------------------------------------------------
