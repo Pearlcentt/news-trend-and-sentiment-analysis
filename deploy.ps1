@@ -129,22 +129,35 @@ Recreate-ConfigMap "spark-jobs-code" @(
     "jobs/streaming/streaming_pipeline.py",
     "jobs/streaming/alert_consumer.py",
     "jobs/quality/checkpoint_runner.py",
+    "jobs/quality/great_expectations.py",
     "jobs/analytics/ml_pipeline.py",
     "jobs/analytics/time_series.py",
     "jobs/analytics/graph_analytics.py",
     "jobs/analytics/advanced_aggregations.py",
     "jobs/utils/sentiment.py",
     "jobs/utils/spark_utils.py",
+    "jobs/utils/data_quality.py",
+    "jobs/utils/join_patterns.py",
     "jobs/config/rt-config.yaml",
     "jobs/config/batch-config.yaml",
-    "jobs/config/analytics-config.yaml"
+    "jobs/config/analytics-config.yaml",
+    "jobs/reference/source_metadata.json"
 )
 
 # 2. crawler-code
 Recreate-ConfigMap "crawler-code" @(
     "crawler/news_crawler.py",
     "crawler/historical_crawler.py",
-    "crawler/feeds.py"
+    "crawler/feeds.py",
+    "crawler/feeds_extended.yaml",
+    "crawler/avro_producer.py",
+    "crawler/schema_registry.py",
+    "crawler/config.py",
+    "crawler/config.kafka.yaml",
+    "crawler/records.py",
+    "crawler/service.py",
+    "crawler/sinks.py",
+    "crawler/state.py"
 )
 
 # 3. dashboard-code
@@ -172,6 +185,7 @@ kubectl apply -f "$K8sDir/02-mongodb.yaml"
 kubectl apply -f "$K8sDir/04-minio.yaml"
 Start-Sleep -Seconds 15
 Wait-ForPods "app=mongodb"
+Wait-ForPods "app=minio"
 Write-Host "  Core infrastructure deployed!" -ForegroundColor Green
 
 # Step 5: Deploy Processing and Serving Layer
@@ -187,6 +201,7 @@ Write-Host "`n[6/7] Deploying applications (Crawler, Dashboard, Airflow, Alerts)
 kubectl apply -f "$K8sDir/07-crawler.yaml"
 kubectl apply -f "$K8sDir/08-streamlit.yaml"
 kubectl apply -f "$K8sDir/09-airflow.yaml"
+kubectl apply -f "$K8sDir/fix-airflow-rbac.yaml"
 kubectl apply -f "$K8sDir/19-alerts-deployment.yaml"
 Wait-ForPods "app=streamlit-dashboard"
 Write-Host "  Applications deployed!" -ForegroundColor Green
@@ -197,6 +212,14 @@ Write-Host "`n[7/7] Deploying processing jobs (Streaming and Batch)..." -Foregro
 
 kubectl apply -f "$K8sDir/11-spark-streaming-job.yaml"
 kubectl apply -f "$K8sDir/12-spark-batch-cronjob.yaml"
+kubectl apply -f "$K8sDir/13-fresh-crawler-job.yaml"
+kubectl apply -f "$K8sDir/14-historical-backfill-job.yaml"
+kubectl apply -f "$K8sDir/15-process-historical-job.yaml"
+kubectl apply -f "$K8sDir/16-classify-articles-job.yaml"
+kubectl apply -f "$K8sDir/17-ml-training-job.yaml"
+kubectl apply -f "$K8sDir/18-data-quality-job.yaml"
+kubectl apply -f "$K8sDir/20-integrated-analytics-job.yaml"
+
 Write-Host "  Processing jobs deployed!" -ForegroundColor Green
 
 # Full deployment: Run data ingestion and processing
@@ -248,10 +271,10 @@ Access Services:
   Grafana:    kubectl port-forward -n news-pipeline svc/grafana 3000:3000
               Then open: http://localhost:3000 (admin/admin)
 
-  Trino:      kubectl port-forward -n news-pipeline svc/trino 8080:8080
-              Then open: http://localhost:8080
+  Trino:      kubectl port-forward -n news-pipeline svc/trino 8082:8082
+              Then open: http://localhost:8082
 
-  Airflow:    kubectl port-forward -n news-pipeline svc/airflow-webserver 8080:8080
+  Airflow:    kubectl port-forward -n news-pipeline svc/airflow 8080:8080
               Then open: http://localhost:8080 (admin/admin)
 
   MongoDB:    kubectl port-forward -n news-pipeline svc/mongodb 27017:27017

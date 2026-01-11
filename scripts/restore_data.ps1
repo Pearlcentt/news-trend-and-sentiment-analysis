@@ -36,20 +36,20 @@ function Import-ToPod {
     Write-Host "  Reading file..." -ForegroundColor DarkGray
     $content = Get-Content -Path $LocalFile -Raw -Encoding UTF8
     
-    # Write to a temp file in the current directory (avoids path issues)
-    $tempFile = "temp_import.json"
-    Push-Location $ProjectRoot
+    # Write to a temp file in the project root (avoids path issues)
+    $tempFile = Join-Path $ProjectRoot "temp_import.json"
     [System.IO.File]::WriteAllText($tempFile, $content, [System.Text.UTF8Encoding]::new($false))
     
     Write-Host "  Copying to pod..." -ForegroundColor DarkGray
     # Build the destination string properly
     $destination = "news-pipeline/" + $pod + ":" + $RemotePath
-    kubectl cp $tempFile $destination
+    
+    # Use full path for kubectl
+    kubectl cp "$tempFile" "$destination"
     $copyResult = $LASTEXITCODE
     
     # Cleanup temp file
-    Remove-Item $tempFile -ErrorAction SilentlyContinue
-    Pop-Location
+    Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
     
     if ($copyResult -ne 0) {
         Write-Error "Failed to copy file to pod (exit code: $copyResult)"

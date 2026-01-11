@@ -24,7 +24,7 @@ spec:
             - |
               pip install pymongo --quiet
               export PYTHONPATH="/opt/jobs"
-              python3 /opt/jobs/streaming/alert_consumer.py
+              python3 /opt/jobs/alert_consumer.py
           env:
             - name: MONGODB_URI
               value: "mongodb://mongodb:27017"
@@ -43,9 +43,8 @@ spec:
           livenessProbe:
             exec:
               command:
-                - python3
-                - -c
-                - "import pymongo; pymongo.MongoClient('mongodb://mongodb:27017').server_info()"
+                - ls
+                - /opt/jobs/alert_consumer.py
             initialDelaySeconds: 30
             periodSeconds: 60
       volumes:

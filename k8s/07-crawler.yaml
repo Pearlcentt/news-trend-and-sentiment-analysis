@@ -14,45 +14,45 @@ spec:
         app: crawler
     spec:
       containers:
-      - name: crawler
-        image: news-crawler:latest
-        imagePullPolicy: IfNotPresent
-        env:
-        - name: KAFKA_BOOTSTRAP_SERVERS
-          value: "kafka-broker:9092"
-        - name: SCHEMA_REGISTRY_URL
-          value: "http://sr-service:8081"
-        - name: CRAWL_INTERVAL
-          value: "60"
-        volumeMounts:
-        - name: crawler-config
-          mountPath: /app/config
-        # CRITICAL: Mount persistent volume for crawler state
-        - name: crawler-state
-          mountPath: /app/state
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          exec:
-            command:
-            - python
-            - -c
-            - "import os; exit(0)"
-          initialDelaySeconds: 30
-          periodSeconds: 60
+        - name: crawler
+          image: news-crawler:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-broker:9092"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://sr-service:8081"
+            - name: CRAWL_INTERVAL
+              value: "60"
+          volumeMounts:
+            - name: crawler-config
+              mountPath: /app/config
+            # CRITICAL: Mount persistent volume for crawler state
+            - name: crawler-state
+              mountPath: /app/state
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os; exit(0)"
+            initialDelaySeconds: 30
+            periodSeconds: 60
       volumes:
-      - name: crawler-config
-        configMap:
-          name: crawler-config
-      # CRITICAL: Persistent volume for crawler state (seen URLs)
-      - name: crawler-state
-        persistentVolumeClaim:
-          claimName: crawler-state-pvc
+        - name: crawler-config
+          configMap:
+            name: crawler-config
+        # CRITICAL: Persistent volume for crawler state (seen URLs)
+        - name: crawler-state
+          persistentVolumeClaim:
+            claimName: crawler-state-pvc
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -60,7 +60,7 @@ metadata:
   name: crawler-config
   namespace: news-pipeline
 data:
-  config.yaml: |
+  config.kafka.yaml: |
     kafka:
       bootstrap_servers: "kafka-broker:9092"
       topic: "news_raw"

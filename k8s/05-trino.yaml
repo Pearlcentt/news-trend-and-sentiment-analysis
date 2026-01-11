@@ -62,5 +62,5 @@ spec:
   selector:
     app: trino
   ports:
-    - port: 8080
+    - port: 8082
       targetPort: 8080

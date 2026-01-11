@@ -35,8 +35,8 @@ spec:
                     --conf spark.driver.memory=512m \
                     --conf spark.pyspark.python=/usr/bin/python3 \
                     --conf spark.jars.ivy=/tmp/.ivy2 \
-                    /opt/spark-jobs/batch/batch_pipeline.py \
-                    --config /opt/spark-jobs/config/batch-config.yaml \
+                    /opt/spark-jobs/batch_pipeline.py \
+                    --config /opt/spark-jobs/batch-config.yaml \
                     --mode k8s
               env:
                 - name: KAFKA_BOOTSTRAP_SERVERS
@@ -57,6 +57,8 @@ spec:
                       key: MINIO_ROOT_PASSWORD
                 - name: PYSPARK_PYTHON
                   value: "/usr/bin/python3"
+                - name: SCHEMA_PATH
+                  value: "/opt/spark-jobs/schemas/news_raw.avsc"
               volumeMounts:
                 - name: spark-jobs
                   mountPath: /opt/spark-jobs
@@ -102,7 +104,8 @@ spec:
                 --packages org.apache.spark:spark-avro_2.12:3.5.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
                 --conf spark.driver.memory=512m \
                 --conf spark.jars.ivy=/tmp/.ivy2 \
-                /opt/spark-jobs/batch/batch_pipeline.py \
+                /opt/spark-jobs/batch_pipeline.py \
+                --config /opt/spark-jobs/batch-config.yaml \
                 --mode k8s
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
@@ -111,6 +114,8 @@ spec:
               value: "mongodb://mongodb:27017"
             - name: MINIO_ENDPOINT
               value: "http://minio:9000"
+            - name: SCHEMA_PATH
+              value: "/opt/spark-jobs/schemas/news_raw.avsc"
           volumeMounts:
             - name: spark-jobs
               mountPath: /opt/spark-jobs
