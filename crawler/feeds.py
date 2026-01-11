@@ -9,7 +9,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from .config import FeedConfig
+from config import FeedConfig
 
 LOG = logging.getLogger("crawler.feeds")
 

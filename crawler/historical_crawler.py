@@ -510,16 +510,26 @@ def main():
     parser.add_argument("--per-day", type=int, default=100, help="Articles per day (max 250)")
     parser.add_argument("--output", choices=["mongodb", "json"], default="mongodb", help="Output destination")
     parser.add_argument("--query", type=str, default="", help="Search query")
+    parser.add_argument("--start-date", type=str, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD)")
     args = parser.parse_args()
     
     print("=" * 60)
     print("HISTORICAL NEWS CRAWLER")
-    print(f"Date range: {args.days} days back")
+    
+    if args.start_date and args.end_date:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+        end_date = datetime.strptime(args.end_date, "%Y-%m-%d")
+        # Set end_date time to end of day
+        end_date = end_date.replace(hour=23, minute=59, second=59)
+        print(f"Date range: {start_date.date()} to {end_date.date()}")
+    else:
+        print(f"Date range: {args.days} days back")
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=args.days)
+
     print(f"Output: {args.output}")
     print("=" * 60)
-    
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=args.days)
     
     all_articles = []
     

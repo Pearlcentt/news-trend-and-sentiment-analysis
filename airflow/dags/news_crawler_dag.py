@@ -39,6 +39,8 @@ jobs_code_mount = k8s.V1VolumeMount(name='jobs-code', mount_path='/opt/jobs')
 common_env = [
     k8s.V1EnvVar(name='MONGODB_URI', value='mongodb://mongodb:27017'),
     k8s.V1EnvVar(name='KAFKA_BOOTSTRAP_SERVERS', value='kafka-broker:9092'),
+    k8s.V1EnvVar(name='SCHEMA_REGISTRY_URL', value='http://sr-service:8081'),
+    k8s.V1EnvVar(name='CRAWLER_STATE_STORE', value='/tmp/crawler_state.json'),
 ]
 
 # Daily News Crawler DAG
@@ -60,11 +62,11 @@ with DAG(
         cmds=["/bin/bash", "-c"],
         arguments=[
             '''
-            pip install requests beautifulsoup4 pymongo feedparser --quiet
-            export PYTHONPATH="/app"
+            pip install pyyaml requests beautifulsoup4 pymongo feedparser fastavro confluent-kafka --quiet
+            export PYTHONPATH="/app/crawler"
             # Task 1: Run Fresh RSS Crawler (in batch mode)
             # Fetch content, push to Kafka, then exit
-            python3 /app/crawler/news_crawler.py --mode batch
+            python3 /app/crawler/news_crawler.py --mode batch --config /app/crawler/feeds_extended.yaml
             '''
         ],
         volumes=[crawler_code_volume, schemas_volume],
@@ -83,24 +85,39 @@ with DAG(
         task_id='process_sentiment',
         name='process-historical-data',
         namespace='news-pipeline',
-        image='bitnami/spark:3.5.3',
+        image='apache/spark:3.5.0-python3',
         cmds=["/bin/bash", "-c"],
         arguments=[
             '''
-            pip install pymongo pyyaml --quiet
-            export PYTHONPATH="/opt/jobs"
-            spark-submit \
+            pip install pymongo pyyaml --target=/tmp/pylibs --quiet 2>/dev/null || true
+            export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/opt/jobs"
+            export HOME=/tmp
+            mkdir -p /tmp/.ivy2
+            
+            /opt/spark/bin/spark-submit \
                 --master local[2] \
-                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0 \
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.spark:spark-avro_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
                 --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
                 --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
-                /opt/jobs/batch/batch_pipeline.py \
-                --config /opt/jobs/config/batch-config.yaml \
+                --conf spark.mongodb.output.database=news_analytics \
+                --conf spark.mongodb.output.collection=historical_articles \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+                --conf spark.hadoop.fs.s3a.access.key=minio-admin \
+                --conf spark.hadoop.fs.s3a.secret.key=minio-secret-key \
+                --conf spark.hadoop.fs.s3a.path.style.access=true \
+                --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                --conf spark.hadoop.fs.s3a.committer.name=directory \
+                --conf spark.hadoop.fs.s3a.committer.staging.tmp.path=/tmp/staging \
+                --conf spark.hadoop.fs.s3a.fast.upload=true \
+                --conf spark.hadoop.fs.s3a.connection.establish.timeout=5000 \
+                /opt/jobs/batch_pipeline.py \
+                --config /opt/jobs/batch-config.yaml \
                 --mode k8s
             '''
         ],
-        volumes=[jobs_code_volume],
-        volume_mounts=[jobs_code_mount],
+        volumes=[jobs_code_volume, schemas_volume],
+        volume_mounts=[jobs_code_mount, schemas_mount],
         env_vars=common_env,
         container_resources=k8s.V1ResourceRequirements(
             limits={"memory": "1Gi", "cpu": "1"},
@@ -111,22 +128,48 @@ with DAG(
     )
 
     # Task 3: Classify Articles
+    # Task 3: Classify Articles (Train/Update Sentiment Model)
     classify_articles = KubernetesPodOperator(
         task_id='classify_articles',
         name='classify-articles',
         namespace='news-pipeline',
-        image='python:3.11-slim',
+        image='apache/spark:3.5.0-python3',
         cmds=["/bin/bash", "-c"],
         arguments=[
             '''
-            pip install pymongo --quiet
-            export PYTHONPATH="/opt/jobs"
-            python3 /opt/jobs/analytics/ml_pipeline.py --task classify
+            pip install pymongo pyyaml numpy --target=/tmp/pylibs --quiet 2>/dev/null || true
+            export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/opt/jobs"
+            export HOME=/tmp
+            mkdir -p /tmp/.ivy2
+
+            /opt/spark/bin/spark-submit \
+                --master local[2] \
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.spark:spark-avro_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+                --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
+                --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.historical_articles \
+                --conf spark.mongodb.output.database=news_analytics \
+                --conf spark.mongodb.output.collection=historical_articles \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+                --conf spark.hadoop.fs.s3a.access.key=minio-admin \
+                --conf spark.hadoop.fs.s3a.secret.key=minio-secret-key \
+                --conf spark.hadoop.fs.s3a.path.style.access=true \
+                --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                --conf spark.hadoop.fs.s3a.committer.name=directory \
+                --conf spark.hadoop.fs.s3a.committer.staging.tmp.path=/tmp/staging \
+                --conf spark.hadoop.fs.s3a.fast.upload=true \
+                --conf spark.hadoop.fs.s3a.connection.establish.timeout=5000 \
+                /opt/jobs/ml_pipeline.py \
+                --config /opt/jobs/analytics-config.yaml
             '''
         ],
-        volumes=[jobs_code_volume],
-        volume_mounts=[jobs_code_mount],
+        volumes=[jobs_code_volume, schemas_volume],
+        volume_mounts=[jobs_code_mount, schemas_mount],
         env_vars=common_env,
+        container_resources=k8s.V1ResourceRequirements(
+            limits={"memory": "2Gi", "cpu": "1"},
+            requests={"memory": "512Mi", "cpu": "250m"}
+        ),
         get_logs=True,
         is_delete_operator_pod=True,
     )
@@ -136,27 +179,42 @@ with DAG(
         task_id='integrated_analytics',
         name='integrated-analytics',
         namespace='news-pipeline',
-        image='bitnami/spark:3.5.3',
+        image='apache/spark:3.5.0-python3',
         cmds=["/bin/bash", "-c"],
         arguments=[
             '''
-            pip install pymongo pyyaml pandas pyarrow --quiet
-            export PYTHONPATH="/opt/jobs"
-            spark-submit \
+            pip install pymongo pyyaml numpy pandas pyarrow --target=/tmp/pylibs --quiet
+            export PYTHONPATH="${PYTHONPATH}:/tmp/pylibs:/opt/jobs"
+            export HOME=/tmp
+            mkdir -p /tmp/.ivy2
+
+            /opt/spark/bin/spark-submit \
                 --master local[2] \
-                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.2.0,graphframes:graphframes:0.8.3-spark3.5-s_2.12 \
+                --packages org.mongodb.spark:mongo-spark-connector_2.12:10.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.spark:spark-avro_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
                 --conf spark.mongodb.input.uri=mongodb://mongodb:27017/news_analytics.processed_articles \
                 --conf spark.mongodb.output.uri=mongodb://mongodb:27017/news_analytics.aggregations \
-                /opt/jobs/analytics/advanced_aggregations.py \
-                --config /opt/jobs/config/analytics-config.yaml
+                --conf spark.mongodb.output.database=news_analytics \
+                --conf spark.mongodb.output.collection=aggregations \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+                --conf spark.hadoop.fs.s3a.access.key=minio-admin \
+                --conf spark.hadoop.fs.s3a.secret.key=minio-secret-key \
+                --conf spark.hadoop.fs.s3a.path.style.access=true \
+                --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+                --conf spark.hadoop.fs.s3a.committer.name=directory \
+                --conf spark.hadoop.fs.s3a.committer.staging.tmp.path=/tmp/staging \
+                --conf spark.hadoop.fs.s3a.fast.upload=true \
+                --conf spark.hadoop.fs.s3a.connection.establish.timeout=5000 \
+                /opt/jobs/advanced_aggregations.py \
+                --config /opt/jobs/analytics-config.yaml
             '''
         ],
         volumes=[jobs_code_volume],
         volume_mounts=[jobs_code_mount],
         env_vars=common_env,
         container_resources=k8s.V1ResourceRequirements(
-            limits={"memory": "2Gi", "cpu": "1"},
-            requests={"memory": "1Gi", "cpu": "500m"}
+            limits={"memory": "4Gi", "cpu": "2"},
+            requests={"memory": "2Gi", "cpu": "1"}
         ),
         get_logs=True,
         is_delete_operator_pod=True,
@@ -187,7 +245,6 @@ print(f'Deleting records processed before {cutoff}...')
 result = db['processed_news'].delete_many({'processed_at': {'$lt': cutoff}})
 print(f'✅ Deleted {result.deleted_count} old RT records')
 
-# Also cleanup aggregation collections based on _last_upsert if possible, or just keep them (they are small)
 client.close()
             "
             '''
@@ -197,5 +254,32 @@ client.close()
         is_delete_operator_pod=True,
     )
 
+    # Task 6: Data Quality Validation (Great Expectations)
+    validate_data = KubernetesPodOperator(
+        task_id='validate_data',
+        name='data-quality-check',
+        namespace='news-pipeline',
+        image='python:3.11-slim',
+        cmds=["/bin/bash", "-c"],
+        arguments=[
+            '''
+            pip install pymongo pandas --quiet
+            export PYTHONPATH="/opt/jobs"
+            # CD to jobs dir (files are flattened)
+            cd /opt/jobs
+            python3 checkpoint_runner.py
+            '''
+        ],
+        volumes=[jobs_code_volume],
+        volume_mounts=[jobs_code_mount],
+        env_vars=common_env,
+        container_resources=k8s.V1ResourceRequirements(
+            limits={"memory": "512Mi", "cpu": "500m"},
+            requests={"memory": "256Mi", "cpu": "250m"}
+        ),
+        get_logs=True,
+        is_delete_operator_pod=True,
+    )
+
     # Task dependencies
-    crawl_news >> process_sentiment >> classify_articles >> integrated_analytics >> cleanup_rt_data
+    crawl_news >> process_sentiment >> validate_data >> classify_articles >> integrated_analytics >> cleanup_rt_data

@@ -53,6 +53,8 @@ def load_yaml(path: Path) -> Dict[str, Any]:
     # Rate limiting between feed fetches
     if os.getenv("RATE_LIMIT_DELAY"):
         config["crawler"]["rate_limit_delay"] = float(os.getenv("RATE_LIMIT_DELAY"))
+    if os.getenv("CRAWLER_STATE_STORE"):
+        config["crawler"]["state_store"] = os.getenv("CRAWLER_STATE_STORE")
     
     return config
 

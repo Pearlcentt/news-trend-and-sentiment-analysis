@@ -82,6 +82,23 @@ class MongoDBResultStore:
         self.db = self.client[database]
         self.collection = self.db["data_quality_results"]
     
+    def convert_numpy(self, obj):
+        """Recursively convert numpy types to native python types for BSON compatibility"""
+        import numpy as np
+        if isinstance(obj, dict):
+            return {k: self.convert_numpy(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self.convert_numpy(i) for i in obj]
+        elif isinstance(obj, (np.intc, np.intp, np.int8,
+                            np.int16, np.int32, np.int64, np.uint8,
+                            np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        return obj
+
     def store(self, result: ValidationResult, data_docs_path: str = None) -> str:
         """Store validation result and return document ID"""
         
@@ -93,6 +110,9 @@ class MongoDBResultStore:
             "expectations": [r.to_dict() for r in result.results],
             "data_docs_path": data_docs_path
         }
+        
+        # Convert numpy types to native python types
+        doc = self.convert_numpy(doc)
         
         insert_result = self.collection.insert_one(doc)
         print(f"📊 Results stored in MongoDB: {insert_result.inserted_id}")
